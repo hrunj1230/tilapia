@@ -1,0 +1,1213 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tilapia - 팀 비용 & 잔액 모니터</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --card-border: #334155;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent: #38bdf8;
+      --accent-hover: #0284c7;
+      --green: #4ade80;
+      --red: #f87171;
+      --yellow: #fbbf24;
+      --badge-bg: #334155;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      line-height: 1.5;
+      padding: 24px 16px;
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--card-border);
+      margin-bottom: 24px;
+    }
+
+    .title-area h1 {
+      font-size: 24px;
+      font-weight: 700;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .title-area p {
+      font-size: 13px;
+      color: var(--text-muted);
+    }
+
+    .controls-area {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+
+    .timer-info {
+      font-size: 13px;
+      color: var(--text-muted);
+      text-align: right;
+    }
+
+    .timer-info strong {
+      color: var(--text-main);
+    }
+
+    button {
+      background-color: var(--accent);
+      color: #0f172a;
+      border: none;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      transition: background-color 0.2s, opacity 0.2s;
+    }
+
+    button:hover:not(:disabled) {
+      background-color: var(--accent-hover);
+      color: #fff;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .btn-secondary {
+      background-color: #475569;
+      color: #fff;
+      padding: 6px 12px;
+      font-size: 12px;
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background-color: #64748b;
+    }
+
+    .btn-danger {
+      background-color: #991b1b;
+      color: #fff;
+      padding: 4px 8px;
+      font-size: 11px;
+    }
+
+    .btn-danger:hover:not(:disabled) {
+      background-color: #dc2626;
+    }
+
+    /* 설정 영역 (접이식) */
+    details.settings-box {
+      background-color: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 14px 18px;
+      margin-bottom: 24px;
+    }
+
+    details.settings-box summary {
+      cursor: pointer;
+      font-weight: 600;
+      color: var(--accent);
+      user-select: none;
+    }
+
+    .settings-content {
+      margin-top: 16px;
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+    }
+
+    .form-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .form-group label {
+      font-size: 13px;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .form-group input {
+      background-color: #0f172a;
+      border: 1px solid var(--card-border);
+      color: #fff;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 13px;
+    }
+
+    .form-group input:focus {
+      outline: 2px solid var(--accent);
+    }
+
+    .key-status {
+      font-size: 11px;
+      padding: 2px 6px;
+      border-radius: 4px;
+    }
+
+    .key-status.set {
+      background-color: #065f46;
+      color: #a7f3d0;
+    }
+
+    .key-status.unset {
+      background-color: #7f1d1d;
+      color: #fecaca;
+    }
+
+    .settings-actions {
+      grid-column: 1 / -1;
+      display: flex;
+      justify-content: flex-end;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    /* 카드 그리드 */
+    .cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+      gap: 24px;
+    }
+
+    .card {
+      background-color: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 12px;
+      padding: 24px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 12px;
+    }
+
+    .card-title-group h2 {
+      font-size: 18px;
+      font-weight: 700;
+    }
+
+    .card-title-group .sub {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .status-badge {
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 9999px;
+    }
+
+    .status-badge.ok {
+      background-color: rgba(74, 222, 128, 0.15);
+      color: var(--green);
+      border: 1px solid rgba(74, 222, 128, 0.3);
+    }
+
+    .status-badge.err {
+      background-color: rgba(248, 113, 113, 0.15);
+      color: var(--red);
+      border: 1px solid rgba(248, 113, 113, 0.3);
+    }
+
+    /* 알림 배너 */
+    .note-box {
+      background-color: rgba(56, 189, 248, 0.1);
+      border-left: 4px solid var(--accent);
+      padding: 10px 14px;
+      border-radius: 4px;
+      font-size: 13px;
+      color: #e0f2fe;
+      line-height: 1.4;
+    }
+
+    .error-box {
+      background-color: rgba(248, 113, 113, 0.1);
+      border-left: 4px solid var(--red);
+      padding: 10px 14px;
+      border-radius: 4px;
+      font-size: 13px;
+      color: #fecaca;
+    }
+
+    .warning-badge {
+      display: inline-block;
+      background-color: var(--red);
+      color: #fff;
+      font-size: 11px;
+      font-weight: bold;
+      padding: 2px 6px;
+      border-radius: 4px;
+      margin-left: 6px;
+    }
+
+    /* 메인 금액 표시 */
+    .main-amount-block {
+      background-color: #0f172a;
+      padding: 16px;
+      border-radius: 8px;
+      border: 1px solid var(--card-border);
+    }
+
+    .main-amount-label {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .main-amount-val {
+      font-size: 32px;
+      font-weight: 800;
+      color: #fff;
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+    }
+
+    .diff-tag {
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .diff-up {
+      color: var(--green);
+    }
+
+    .diff-down {
+      color: var(--red);
+    }
+
+    .diff-neutral {
+      color: var(--text-muted);
+    }
+
+    /* 보조 수치 그리드 */
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 12px;
+    }
+
+    .stat-item {
+      background-color: rgba(15, 23, 42, 0.5);
+      border: 1px solid var(--card-border);
+      padding: 10px 12px;
+      border-radius: 6px;
+    }
+
+    .stat-item .label {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .stat-item .val {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--text-main);
+      margin-top: 2px;
+    }
+
+    /* 최근 14일 테이블 */
+    .daily-section {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .daily-section h3 {
+      font-size: 13px;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    .daily-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+
+    .daily-table th {
+      text-align: left;
+      padding: 6px 8px;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--card-border);
+      font-weight: 500;
+    }
+
+    .daily-table td {
+      padding: 6px 8px;
+      border-bottom: 1px solid rgba(51, 65, 85, 0.4);
+    }
+
+    .daily-table tr:hover {
+      background-color: rgba(255, 255, 255, 0.02);
+    }
+
+    .daily-amount {
+      text-align: right;
+      font-family: monospace;
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .empty-state {
+      font-size: 12px;
+      color: var(--text-muted);
+      text-align: center;
+      padding: 16px 0;
+    }
+
+    @media (max-width: 640px) {
+      .cards-grid {
+        grid-template-columns: 1fr;
+      }
+      .stats-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <header>
+    <div class="title-area">
+      <h1>Tilapia 모니터</h1>
+      <p>Runpod 선불 잔액, Langfuse 이번 달 추적 비용, OpenRouter 크레딧 대시보드</p>
+    </div>
+    <div class="controls-area">
+      <div class="timer-info">
+        <div>마지막 조회: <strong id="refreshedAtText">-</strong></div>
+        <div>다음 자동 조회까지: <strong id="countdownText">-</strong></div>
+      </div>
+      <button id="refreshBtn" onclick="handleRefresh()">지금 조회</button>
+    </div>
+  </header>
+
+  <!-- 접어 둔 설정 영역 -->
+  <details class="settings-box" id="settingsDetails">
+    <summary>⚙️ 모니터링 및 API 키 설정 (클릭하여 열기)</summary>
+    <div class="settings-content">
+      <div class="form-group">
+        <label for="intervalInput">
+          <span>자동 조회 주기 (1~60분)</span>
+        </label>
+        <input type="number" id="intervalInput" min="1" max="60" placeholder="5">
+      </div>
+
+      <div class="form-group">
+        <label for="hostInput">
+          <span>Langfuse 호스트</span>
+        </label>
+        <input type="text" id="hostInput" placeholder="https://cloud.langfuse.com">
+      </div>
+
+      <div class="form-group">
+        <label>
+          <span>Runpod API Key</span>
+          <span id="rpKeyStatus" class="key-status unset">미설정</span>
+        </label>
+        <div style="display: flex; gap: 4px;">
+          <input type="password" id="rpKeyInput" placeholder="새 키 입력 (비워두면 기존 유지)" style="flex:1;">
+          <button class="btn-danger" type="button" onclick="deleteKey('runpodApiKey')">삭제</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>
+          <span>Langfuse Public Key</span>
+          <span id="lfPkStatus" class="key-status unset">미설정</span>
+        </label>
+        <div style="display: flex; gap: 4px;">
+          <input type="text" id="lfPkInput" placeholder="새 키 입력 (비워두면 기존 유지)" style="flex:1;">
+          <button class="btn-danger" type="button" onclick="deleteKey('langfusePublicKey')">삭제</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>
+          <span>Langfuse Secret Key</span>
+          <span id="lfSkStatus" class="key-status unset">미설정</span>
+        </label>
+        <div style="display: flex; gap: 4px;">
+          <input type="password" id="lfSkInput" placeholder="새 키 입력 (비워두면 기존 유지)" style="flex:1;">
+          <button class="btn-danger" type="button" onclick="deleteKey('langfuseSecretKey')">삭제</button>
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label>
+          <span>OpenRouter API Key</span>
+          <span id="orKeyStatus" class="key-status unset">미설정</span>
+        </label>
+        <div style="display: flex; gap: 4px;">
+          <input type="password" id="openrouterKeyInput" placeholder="새 키 입력 (비워두면 기존 유지)" style="flex:1;">
+          <button class="btn-danger" type="button" onclick="deleteKey('openrouterApiKey')">삭제</button>
+        </div>
+      </div>
+
+      <div class="settings-actions">
+        <button type="button" class="btn-secondary" onclick="saveSettings()">설정 저장</button>
+      </div>
+    </div>
+  </details>
+
+  <!-- 메인 카드 그리드 -->
+  <main class="cards-grid">
+
+    <!-- Runpod 카드 -->
+    <article class="card" id="runpodCard">
+      <div class="card-header">
+        <div class="card-title-group">
+          <h2>Runpod</h2>
+          <div class="sub" id="rpEmail">계정 확인 중...</div>
+        </div>
+        <div id="rpStatusBadge" class="status-badge err">대기 중</div>
+      </div>
+
+      <div id="rpErrorBox" class="error-box" style="display: none;"></div>
+
+      <div class="main-amount-block">
+        <div class="main-amount-label">
+          보유 금액 (선불 크레딧)
+          <span id="rpUnderBalanceBadge" class="warning-badge" style="display: none;">잔액 부족 경고</span>
+        </div>
+        <div class="main-amount-val">
+          <span id="rpBalanceVal">-</span>
+          <span id="rpDiffTag" class="diff-tag diff-neutral"></span>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="label">시간당 소진 요금</div>
+          <div class="val" id="rpSpendPerHour">-</div>
+        </div>
+        <div class="stat-item">
+          <div class="label">평생 누적 사용액</div>
+          <div class="val" id="rpLifetimeSpend">-</div>
+        </div>
+        <div class="stat-item">
+          <div class="label">최소 잔액 (Min Balance)</div>
+          <div class="val" id="rpMinBalance">-</div>
+        </div>
+        <div class="stat-item">
+          <div class="label">크레딧 알림 임계값</div>
+          <div class="val" id="rpAlertThreshold">-</div>
+        </div>
+      </div>
+
+      <div class="daily-section">
+        <h3>최근 14일 일별 요금</h3>
+        <div id="rpChargesErrorBox" class="error-box" style="display: none; margin-bottom: 8px;"></div>
+        <table class="daily-table">
+          <thead>
+            <tr>
+              <th>기간</th>
+              <th style="text-align: right;">금액 (USD)</th>
+            </tr>
+          </thead>
+          <tbody id="rpDailyTbody">
+            <tr><td colspan="2" class="empty-state">내역이 없습니다.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+
+    <!-- Langfuse 카드 -->
+    <article class="card" id="langfuseCard">
+      <div class="card-header">
+        <div class="card-title-group">
+          <h2>Langfuse</h2>
+          <div class="sub" id="lfProjectInfo">프로젝트 확인 중...</div>
+        </div>
+        <div id="lfStatusBadge" class="status-badge err">대기 중</div>
+      </div>
+
+      <div class="note-box" id="lfNoteBox">
+        ※ <strong>안내</strong>: Langfuse Cloud 공개 API에는 선불 잔액이나 청구서 잔액이 없습니다.
+        본 카드의 금액은 <strong>이번 달 추적된 LLM 비용</strong>(Metrics API observations.totalCost 합계)입니다.
+      </div>
+
+      <div id="lfErrorBox" class="error-box" style="display: none;"></div>
+
+      <div class="main-amount-block">
+        <div class="main-amount-label">이번 달 추적된 LLM 비용 (UTC 기준)</div>
+        <div class="main-amount-val">
+          <span id="lfMonthCostVal">-</span>
+          <span id="lfDiffTag" class="diff-tag diff-neutral"></span>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="label">오늘 추적 비용 (UTC)</div>
+          <div class="val" id="lfTodayCost">-</div>
+        </div>
+        <div class="stat-item">
+          <div class="label">프로젝트 개수</div>
+          <div class="val" id="lfProjectCount">-</div>
+        </div>
+      </div>
+
+      <div class="daily-section">
+        <h3>최근 14일 일별 추적 비용</h3>
+        <div id="lfDailyErrorBox" class="error-box" style="display: none; margin-bottom: 8px;"></div>
+        <table class="daily-table">
+          <thead>
+            <tr>
+              <th>날짜</th>
+              <th style="text-align: right;">비용 (USD)</th>
+            </tr>
+          </thead>
+          <tbody id="lfDailyTbody">
+            <tr><td colspan="2" class="empty-state">내역이 없습니다.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+
+    <!-- OpenRouter 카드 -->
+    <article class="card" id="openrouterCard">
+      <div class="card-header">
+        <div class="card-title-group">
+          <h2>OpenRouter</h2>
+          <div class="sub" id="orScopeInfo">계정 확인 중...</div>
+        </div>
+        <div id="orStatusBadge" class="status-badge err">대기 중</div>
+      </div>
+
+      <div class="note-box" id="orNoteBox">
+        ※ <strong>안내</strong>: 계정 남은 크레딧은 구매분(total_credits)에서 누적 사용(total_usage)을 뺀 값이고, 일별 표는 완료된 UTC 일입니다. 추론용 키만 있으면 계정 잔액이 아니라 그 키의 한도와 사용량입니다. BYOK는 크레딧 사용과 따로 보여 줍니다.
+      </div>
+
+      <div id="orErrorBox" class="error-box" style="display: none;"></div>
+      <div id="orCreditsErrorBox" class="error-box" style="display: none;"></div>
+      <div id="orKeyErrorBox" class="error-box" style="display: none;"></div>
+
+      <div class="main-amount-block">
+        <div class="main-amount-label" id="orMainAmountLabel">남은 크레딧</div>
+        <div class="main-amount-val">
+          <span id="orMainAmountVal">-</span>
+          <span id="orDiffTag" class="diff-tag diff-neutral"></span>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-item">
+          <div class="label">누적 구매</div>
+          <div class="val" id="orTotalCredits">-</div>
+        </div>
+        <div class="stat-item">
+          <div class="label">누적 사용</div>
+          <div class="val" id="orTotalUsage">-</div>
+        </div>
+        <div class="stat-item">
+          <div class="label">오늘(UTC) 계정 사용</div>
+          <div class="val" id="orAccountToday">-</div>
+        </div>
+        <div class="stat-item">
+          <div class="label">이 키의 오늘 사용</div>
+          <div class="val" id="orKeyToday">-</div>
+        </div>
+        <div class="stat-item">
+          <div class="label">이 키의 남은 한도</div>
+          <div class="val" id="orKeyLimit">-</div>
+        </div>
+      </div>
+
+      <div class="daily-section">
+        <h3>최근 14일 일별 사용량</h3>
+        <div id="orDailyErrorBox" class="error-box" style="display: none; margin-bottom: 8px;"></div>
+        <table class="daily-table">
+          <thead>
+            <tr>
+              <th>날짜</th>
+              <th style="text-align: right;">크레딧 사용 (USD)</th>
+              <th style="text-align: right;">BYOK 추정 (USD)</th>
+            </tr>
+          </thead>
+          <tbody id="orDailyTbody">
+            <tr><td colspan="3" class="empty-state">내역이 없습니다.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+
+  </main>
+
+  <script>
+    let nextRefreshTarget = null;
+    let countdownIntervalId = null;
+
+    function formatUsd(val) {
+      if (val === null || val === undefined || isNaN(val)) return '-';
+      return '$' + Number(val).toLocaleString(undefined, {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 4
+      }) + ' USD';
+    }
+
+    function formatDiff(diff) {
+      if (diff === null || diff === undefined || isNaN(diff)) return '';
+      const num = Number(diff);
+      if (num > 0) return `(+${num.toFixed(4)} USD)`;
+      if (num < 0) return `(${num.toFixed(4)} USD)`;
+      return '(±0.00 USD)';
+    }
+
+    function renderDiffTag(el, diff) {
+      if (diff === null || diff === undefined || isNaN(Number(diff))) {
+        el.textContent = '';
+        el.className = 'diff-tag diff-neutral';
+        return;
+      }
+      const num = Number(diff);
+      el.textContent = formatDiff(num);
+      if (num > 0) el.className = 'diff-tag diff-up';
+      else if (num < 0) el.className = 'diff-tag diff-down';
+      else el.className = 'diff-tag diff-neutral';
+    }
+
+    function updateCountdown() {
+      const el = document.getElementById('countdownText');
+      if (!nextRefreshTarget) {
+        el.textContent = '-';
+        return;
+      }
+      const now = new Date().getTime();
+      const diffMs = nextRefreshTarget.getTime() - now;
+      if (diffMs <= 0) {
+        el.textContent = '조회 예정...';
+        return;
+      }
+      const totalSec = Math.floor(diffMs / 1000);
+      const min = Math.floor(totalSec / 60);
+      const sec = totalSec % 60;
+      el.textContent = `${min}분 ${sec}초`;
+    }
+
+    function renderStatus(data) {
+      // 1. 헤더 시간
+      const refreshedAtEl = document.getElementById('refreshedAtText');
+      if (data.refreshedAt) {
+        const d = new Date(data.refreshedAt);
+        refreshedAtEl.textContent = d.toLocaleTimeString();
+      } else {
+        refreshedAtEl.textContent = '아직 없음';
+      }
+
+      if (data.nextRefreshAt) {
+        nextRefreshTarget = new Date(data.nextRefreshAt);
+      } else {
+        nextRefreshTarget = null;
+      }
+      updateCountdown();
+
+      // 2. Runpod 카드
+      const rp = data.runpod || {};
+      const rpBadge = document.getElementById('rpStatusBadge');
+      const rpErrBox = document.getElementById('rpErrorBox');
+      const rpEmailEl = document.getElementById('rpEmail');
+      const rpBalEl = document.getElementById('rpBalanceVal');
+      const rpDiffEl = document.getElementById('rpDiffTag');
+      const rpUnderBadge = document.getElementById('rpUnderBalanceBadge');
+      const rpSpendHrEl = document.getElementById('rpSpendPerHour');
+      const rpLifetimeEl = document.getElementById('rpLifetimeSpend');
+      const rpMinBalEl = document.getElementById('rpMinBalance');
+      const rpAlertEl = document.getElementById('rpAlertThreshold');
+      const rpDailyTbody = document.getElementById('rpDailyTbody');
+
+      if (rp.ok) {
+        rpBadge.textContent = '정상';
+        rpBadge.className = 'status-badge ok';
+        rpErrBox.style.display = 'none';
+      } else {
+        rpBadge.textContent = '오류';
+        rpBadge.className = 'status-badge err';
+        rpErrBox.textContent = rp.error || '오류가 발생했습니다.';
+        rpErrBox.style.display = 'block';
+      }
+
+      if (rp.email) rpEmailEl.textContent = rp.email;
+      if (rp.balanceUsd !== null && rp.balanceUsd !== undefined) {
+        rpBalEl.textContent = formatUsd(rp.balanceUsd);
+      }
+      renderDiffTag(rpDiffEl, rp.diffFromPreviousUsd);
+
+      if (rp.underBalance) {
+        rpUnderBadge.style.display = 'inline-block';
+      } else {
+        rpUnderBadge.style.display = 'none';
+      }
+
+      if (rp.spendPerHourUsd !== null) rpSpendHrEl.textContent = formatUsd(rp.spendPerHourUsd) + '/hr';
+      if (rp.lifetimeSpendUsd !== null) rpLifetimeEl.textContent = formatUsd(rp.lifetimeSpendUsd);
+      if (rp.minBalanceUsd !== null) rpMinBalEl.textContent = formatUsd(rp.minBalanceUsd);
+      if (rp.alertThresholdUsd !== null) rpAlertEl.textContent = formatUsd(rp.alertThresholdUsd);
+
+      // Runpod chargesError 및 daily 테이블 렌더링 (DOM API만 사용, innerHTML 금지)
+      const rpChargesErrBox = document.getElementById('rpChargesErrorBox');
+      if (rp.chargesError) {
+        rpChargesErrBox.textContent = rp.chargesError;
+        rpChargesErrBox.style.display = 'block';
+      } else {
+        rpChargesErrBox.textContent = '';
+        rpChargesErrBox.style.display = 'none';
+      }
+
+      while (rpDailyTbody.firstChild) {
+        rpDailyTbody.removeChild(rpDailyTbody.firstChild);
+      }
+
+      if (!rp.chargesError) {
+        if (rp.daily && rp.daily.length > 0) {
+          for (const item of rp.daily) {
+            const tr = document.createElement('tr');
+            const tdLabel = document.createElement('td');
+            const s = item.start ? item.start.split('T')[0] : '';
+            const e = item.end ? item.end.split('T')[0] : '';
+            tdLabel.textContent = (s === e || !e) ? s : `${s} ~ ${e}`;
+
+            const tdAmt = document.createElement('td');
+            tdAmt.className = 'daily-amount';
+            tdAmt.textContent = formatUsd(item.totalAmountUsd);
+
+            tr.appendChild(tdLabel);
+            tr.appendChild(tdAmt);
+            rpDailyTbody.appendChild(tr);
+          }
+        } else {
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 2;
+          td.className = 'empty-state';
+          td.textContent = '내역이 없습니다.';
+          tr.appendChild(td);
+          rpDailyTbody.appendChild(tr);
+        }
+      }
+
+      // 3. Langfuse 카드
+      const lf = data.langfuse || {};
+      const lfBadge = document.getElementById('lfStatusBadge');
+      const lfErrBox = document.getElementById('lfErrorBox');
+      const lfProjInfo = document.getElementById('lfProjectInfo');
+      const lfMonthCostEl = document.getElementById('lfMonthCostVal');
+      const lfDiffEl = document.getElementById('lfDiffTag');
+      const lfTodayCostEl = document.getElementById('lfTodayCost');
+      const lfProjCountEl = document.getElementById('lfProjectCount');
+      const lfDailyTbody = document.getElementById('lfDailyTbody');
+
+      if (lf.ok) {
+        lfBadge.textContent = '정상';
+        lfBadge.className = 'status-badge ok';
+        lfErrBox.style.display = 'none';
+      } else {
+        lfBadge.textContent = '오류';
+        lfBadge.className = 'status-badge err';
+        lfErrBox.textContent = lf.error || '오류가 발생했습니다.';
+        lfErrBox.style.display = 'block';
+      }
+
+      if (lf.projectName) {
+        lfProjInfo.textContent = `프로젝트: ${lf.projectName}`;
+      }
+      if (lf.monthCostUsd !== null && lf.monthCostUsd !== undefined) {
+        lfMonthCostEl.textContent = formatUsd(lf.monthCostUsd);
+      }
+      renderDiffTag(lfDiffEl, lf.diffFromPreviousUsd);
+
+      if (lf.todayCostUsd !== null && lf.todayCostUsd !== undefined) {
+        lfTodayCostEl.textContent = formatUsd(lf.todayCostUsd);
+      } else {
+        lfTodayCostEl.textContent = '-';
+      }
+      if (lf.projectCount !== null) lfProjCountEl.textContent = `${lf.projectCount}개`;
+
+      // Langfuse dailyError 및 daily 테이블 렌더링 (DOM API만 사용, innerHTML 금지)
+      const lfDailyErrBox = document.getElementById('lfDailyErrorBox');
+      if (lf.dailyError) {
+        lfDailyErrBox.textContent = lf.dailyError;
+        lfDailyErrBox.style.display = 'block';
+      } else {
+        lfDailyErrBox.textContent = '';
+        lfDailyErrBox.style.display = 'none';
+      }
+
+      while (lfDailyTbody.firstChild) {
+        lfDailyTbody.removeChild(lfDailyTbody.firstChild);
+      }
+
+      if (!lf.dailyError) {
+        if (lf.daily && lf.daily.length > 0) {
+          for (const item of lf.daily) {
+            const tr = document.createElement('tr');
+            const tdDate = document.createElement('td');
+            tdDate.textContent = item.date || '';
+
+            const tdAmt = document.createElement('td');
+            tdAmt.className = 'daily-amount';
+            tdAmt.textContent = formatUsd(item.amountUsd);
+
+            tr.appendChild(tdDate);
+            tr.appendChild(tdAmt);
+            lfDailyTbody.appendChild(tr);
+          }
+        } else {
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 2;
+          td.className = 'empty-state';
+          td.textContent = '내역이 없습니다.';
+          tr.appendChild(td);
+          lfDailyTbody.appendChild(tr);
+        }
+      }
+
+      // 4. OpenRouter 카드
+      const or = data.openrouter || {};
+      const orBadge = document.getElementById('orStatusBadge');
+      const orScopeInfo = document.getElementById('orScopeInfo');
+      const orErrBox = document.getElementById('orErrorBox');
+      const orCreditsErrBox = document.getElementById('orCreditsErrorBox');
+      const orKeyErrBox = document.getElementById('orKeyErrorBox');
+      const orMainLabel = document.getElementById('orMainAmountLabel');
+      const orMainVal = document.getElementById('orMainAmountVal');
+      const orDiffEl = document.getElementById('orDiffTag');
+      const orTotalCreditsEl = document.getElementById('orTotalCredits');
+      const orTotalUsageEl = document.getElementById('orTotalUsage');
+      const orAccountTodayEl = document.getElementById('orAccountToday');
+      const orKeyTodayEl = document.getElementById('orKeyToday');
+      const orKeyLimitEl = document.getElementById('orKeyLimit');
+      const orDailyErrBox = document.getElementById('orDailyErrorBox');
+      const orDailyTbody = document.getElementById('orDailyTbody');
+
+      if (or.ok) {
+        orBadge.textContent = '정상';
+        orBadge.className = 'status-badge ok';
+        orErrBox.style.display = 'none';
+      } else {
+        orBadge.textContent = '오류';
+        orBadge.className = 'status-badge err';
+        orErrBox.textContent = or.error || '오류가 발생했습니다.';
+        orErrBox.style.display = 'block';
+      }
+
+      if (or.scope === 'account') {
+        orScopeInfo.textContent = 'Management 키 (계정 모드)';
+      } else if (or.scope === 'key') {
+        orScopeInfo.textContent = '추론용 키 (키 제한 모드)';
+      } else {
+        orScopeInfo.textContent = or.ok ? '확인 완료' : '계정 확인 중...';
+      }
+
+      // 개별 오류 상자들
+      if (or.creditsError) {
+        orCreditsErrBox.textContent = or.creditsError;
+        orCreditsErrBox.style.display = 'block';
+      } else {
+        orCreditsErrBox.textContent = '';
+        orCreditsErrBox.style.display = 'none';
+      }
+
+      if (or.keyError) {
+        orKeyErrBox.textContent = or.keyError;
+        orKeyErrBox.style.display = 'block';
+      } else {
+        orKeyErrBox.textContent = '';
+        orKeyErrBox.style.display = 'none';
+      }
+
+      // 큰 숫자 라벨 및 금액
+      if (or.scope === 'account') {
+        orMainLabel.textContent = '남은 크레딧';
+        if (or.remainingUsd !== null && or.remainingUsd !== undefined) {
+          orMainVal.textContent = formatUsd(or.remainingUsd);
+        } else {
+          orMainVal.textContent = '-';
+        }
+      } else if (or.scope === 'key') {
+        if (or.keyLimitRemainingUsd !== null && or.keyLimitRemainingUsd !== undefined) {
+          orMainLabel.textContent = '이 키의 남은 한도';
+          orMainVal.textContent = formatUsd(or.keyLimitRemainingUsd);
+        } else {
+          orMainLabel.textContent = '이 키의 이번 달 사용';
+          if (or.keyUsageMonthlyUsd !== null && or.keyUsageMonthlyUsd !== undefined) {
+            orMainVal.textContent = formatUsd(or.keyUsageMonthlyUsd);
+          } else {
+            orMainVal.textContent = '-';
+          }
+        }
+      } else {
+        orMainLabel.textContent = '남은 크레딧';
+        if (or.remainingUsd !== null && or.remainingUsd !== undefined) {
+          orMainVal.textContent = formatUsd(or.remainingUsd);
+        } else {
+          orMainVal.textContent = '-';
+        }
+      }
+      renderDiffTag(orDiffEl, or.diffFromPreviousUsd);
+
+      // 보조 수치
+      if (or.totalCreditsUsd !== null && or.totalCreditsUsd !== undefined) {
+        orTotalCreditsEl.textContent = formatUsd(or.totalCreditsUsd);
+      } else {
+        orTotalCreditsEl.textContent = '-';
+      }
+
+      if (or.totalUsageUsd !== null && or.totalUsageUsd !== undefined) {
+        orTotalUsageEl.textContent = formatUsd(or.totalUsageUsd);
+      } else {
+        orTotalUsageEl.textContent = '-';
+      }
+
+      if (or.todayUsageUsd !== null && or.todayUsageUsd !== undefined) {
+        orAccountTodayEl.textContent = formatUsd(or.todayUsageUsd);
+      } else {
+        orAccountTodayEl.textContent = '-';
+      }
+
+      if (or.keyUsageDailyUsd !== null && or.keyUsageDailyUsd !== undefined) {
+        orKeyTodayEl.textContent = formatUsd(or.keyUsageDailyUsd);
+      } else {
+        orKeyTodayEl.textContent = '-';
+      }
+
+      if (or.keyLimitUnlimited === true) {
+        orKeyLimitEl.textContent = '무제한';
+      } else if (or.keyLimitRemainingUsd !== null && or.keyLimitRemainingUsd !== undefined) {
+        orKeyLimitEl.textContent = formatUsd(or.keyLimitRemainingUsd);
+      } else {
+        orKeyLimitEl.textContent = '-';
+      }
+
+      // 일별 사용량 테이블
+      if (or.dailyError) {
+        orDailyErrBox.textContent = or.dailyError;
+        orDailyErrBox.style.display = 'block';
+      } else {
+        orDailyErrBox.textContent = '';
+        orDailyErrBox.style.display = 'none';
+      }
+
+      while (orDailyTbody.firstChild) {
+        orDailyTbody.removeChild(orDailyTbody.firstChild);
+      }
+
+      if (!or.dailyError) {
+        if (or.daily && or.daily.length > 0) {
+          for (const item of or.daily) {
+            const tr = document.createElement('tr');
+            const tdDate = document.createElement('td');
+            tdDate.textContent = item.date || '';
+
+            const tdUsage = document.createElement('td');
+            tdUsage.className = 'daily-amount';
+            tdUsage.textContent = formatUsd(item.usageUsd);
+
+            const tdByok = document.createElement('td');
+            tdByok.className = 'daily-amount';
+            tdByok.textContent = formatUsd(item.byokUsd);
+
+            tr.appendChild(tdDate);
+            tr.appendChild(tdUsage);
+            tr.appendChild(tdByok);
+            orDailyTbody.appendChild(tr);
+          }
+        } else {
+          const tr = document.createElement('tr');
+          const td = document.createElement('td');
+          td.colSpan = 3;
+          td.className = 'empty-state';
+          td.textContent = '내역이 없습니다.';
+          tr.appendChild(td);
+          orDailyTbody.appendChild(tr);
+        }
+      }
+    }
+
+    async function loadStatus() {
+      try {
+        const res = await fetch('/api/status');
+        if (res.ok) {
+          const data = await res.json();
+          renderStatus(data);
+        }
+      } catch (err) {
+        console.error('상태 로드 실패:', err);
+      }
+    }
+
+    async function handleRefresh() {
+      const btn = document.getElementById('refreshBtn');
+      btn.disabled = true;
+      const originalText = btn.textContent;
+      btn.textContent = '조회 중...';
+
+      try {
+        const res = await fetch('/api/refresh', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: '{}'
+        });
+        if (res.ok) {
+          const data = await res.json();
+          renderStatus(data);
+        } else {
+          alert('조회에 실패했습니다.');
+        }
+      } catch (err) {
+        alert('네트워크 오류가 발생했습니다: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = originalText;
+      }
+    }
+
+    async function loadSettings() {
+      try {
+        const res = await fetch('/api/settings');
+        if (!res.ok) return;
+        const s = await res.json();
+
+        document.getElementById('intervalInput').value = s.intervalMinutes || 5;
+        document.getElementById('hostInput').value = s.langfuseHost || 'https://cloud.langfuse.com';
+
+        updateKeyStatus('rpKeyStatus', s.runpodApiKey);
+        updateKeyStatus('lfPkStatus', s.langfusePublicKey);
+        updateKeyStatus('lfSkStatus', s.langfuseSecretKey);
+        updateKeyStatus('orKeyStatus', s.openrouterApiKey);
+      } catch (err) {
+        console.error('설정 로드 실패:', err);
+      }
+    }
+
+    function updateKeyStatus(elId, keyObj) {
+      const el = document.getElementById(elId);
+      if (keyObj && keyObj.isSet) {
+        el.textContent = `설정됨 (...${keyObj.last4})`;
+        el.className = 'key-status set';
+      } else {
+        el.textContent = '미설정';
+        el.className = 'key-status unset';
+      }
+    }
+
+    async function saveSettings() {
+      const intervalVal = parseInt(document.getElementById('intervalInput').value, 10);
+      const hostVal = document.getElementById('hostInput').value.trim();
+      const rpKey = document.getElementById('rpKeyInput').value;
+      const lfPk = document.getElementById('lfPkInput').value;
+      const lfSk = document.getElementById('lfSkInput').value;
+      const orKey = document.getElementById('openrouterKeyInput').value;
+
+      const payload = {
+        intervalMinutes: intervalVal,
+        langfuseHost: hostVal,
+        runpodApiKey: rpKey,
+        langfusePublicKey: lfPk,
+        langfuseSecretKey: lfSk,
+        openrouterApiKey: orKey,
+      };
+
+      try {
+        const res = await fetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+
+        if (!res.ok) {
+          const errData = await res.json();
+          alert('설정 저장 실패: ' + (errData.detail || '오류가 발생했습니다.'));
+          return;
+        }
+
+        // 입력칸 비우기
+        document.getElementById('rpKeyInput').value = '';
+        document.getElementById('lfPkInput').value = '';
+        document.getElementById('lfSkInput').value = '';
+        document.getElementById('openrouterKeyInput').value = '';
+
+        alert('설정이 저장되었습니다.');
+        await loadSettings();
+        // 설정 후 즉시 갱신
+        await handleRefresh();
+      } catch (err) {
+        alert('요청 중 오류가 발생했습니다: ' + err.message);
+      }
+    }
+
+    async function deleteKey(keyField) {
+      if (!confirm('정말로 이 API 키를 삭제하시겠습니까?')) return;
+      const payload = {};
+      payload[keyField] = null;
+
+      try {
+        const res = await fetch('/api/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (res.ok) {
+          alert('키가 삭제되었습니다.');
+          await loadSettings();
+          await handleRefresh();
+        } else {
+          alert('키 삭제 실패');
+        }
+      } catch (err) {
+        alert('오류 발생: ' + err.message);
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', () => {
+      loadStatus();
+      loadSettings();
+      countdownIntervalId = setInterval(updateCountdown, 1000);
+      // 브라우저 30초 주기 상태 동기화
+      setInterval(loadStatus, 30000);
+    });
+  </script>
+</body>
+</html>
