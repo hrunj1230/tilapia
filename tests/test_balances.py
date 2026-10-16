@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import sys
 from pathlib import Path
 import pytest
@@ -1956,10 +1957,27 @@ def test_render_html_escapes_script_tag_in_error():
         },
     }
     html = render_html(data)
-    assert "<script>" not in html
-    assert "</script>" not in html
+    assert html.count("<script>") == 1
+    assert html.count("</script>") == 1
+    assert "<script>alert" not in html
     assert "&lt;script&gt;" in html
     assert "&lt;/script&gt;" in html
+    assert "innerHTML" not in html
+    assert "localStorage" not in html
+    assert "eval(" not in html
+    assert "document.write" not in html
+    assert "금액 다시 가져오기" in html
+    assert 'id="refresh-balances"' in html
+    assert "sessionStorage" in html
+    assert "tilapia.githubToken" in html
+    assert (
+        "https://api.github.com/repos/hrunj1230/tilapia/actions/workflows/balances.yml/dispatches"
+        in html
+    )
+    assert 'redirect: "error"' in html
+    assert "knownIds" in html
+    assert "pickNewRun" in html
+    assert not re.search(r"Bearer\s+[A-Za-z0-9]", html)
 
 
 # --------------------------------------------------------------------------
@@ -2116,6 +2134,9 @@ def test_pages_workflow_deploys_report_without_printing_secrets():
     workflow = (
         Path(__file__).resolve().parent.parent / ".github" / "workflows" / "balances.yml"
     ).read_text(encoding="utf-8")
+    assert "workflow_dispatch" in workflow
+    assert "schedule" not in workflow
+    assert "cron" not in workflow
     assert "actions/upload-pages-artifact@v3" in workflow
     assert "actions/deploy-pages@v4" in workflow
     assert "path: dist" in workflow
@@ -2129,7 +2150,26 @@ def test_pages_workflow_deploys_report_without_printing_secrets():
     assert "echo $" not in lowered
 
 
-
-
-
-
+# --------------------------------------------------------------------------
+# 46. 정상 금액 데이터로 render_html 호출 시 출처 문구 및 id 속성 검증
+# --------------------------------------------------------------------------
+def test_render_html_with_normal_data_has_refresh_source_and_no_auto_run():
+    data = {
+        "runpod": {
+            "ok": True,
+            "balanceUsd": 100.0,
+            "spendPerHourUsd": 0.5,
+            "lifetimeSpendUsd": 300.0,
+            "underBalance": False,
+        },
+        "openrouter": {
+            "ok": True,
+            "scope": "account",
+            "remainingUsd": 50.0,
+        },
+        "missingSecrets": [],
+    }
+    html = render_html(data)
+    assert "자동 실행" not in html
+    assert "출처: 페이지의 가져오기 버튼" in html
+    assert 'id="generated-at"' in html

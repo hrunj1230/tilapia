@@ -63,6 +63,285 @@ def safe_escape(val: Any) -> str:
     return html.escape(str(val), quote=True)
 
 
+PAGE_REFRESH_MARKUP = r"""<style>
+.refresh-panel {
+  margin: 0 0 24px;
+  padding: 16px;
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  background: var(--card-bg);
+  text-align: left;
+}
+.refresh-help {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+.refresh-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.refresh-row input {
+  width: min(100%, 280px);
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--card-border);
+  background: var(--bg);
+  color: var(--text-main);
+}
+.refresh-row button {
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--card-border);
+  background: var(--bg);
+  color: var(--text-main);
+  cursor: pointer;
+}
+#refresh-balances {
+  background: var(--accent);
+  color: #0f172a;
+  border-color: transparent;
+  font-weight: 700;
+}
+#refresh-status {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-main);
+  min-height: 1.2em;
+}
+</style>
+<section class="refresh-panel" aria-label="금액 다시 가져오기">
+  <p class="refresh-help">금액은 이 버튼을 누를 때만 다시 가져옵니다. GitHub 토큰은 이 브라우저 탭에만 저장되고, 저장소와 페이지 주소에는 들어가지 않습니다. 토큰이 없는 사람은 마지막 금액을 봅니다. 채팅에 토큰을 붙여 넣지 마세요. 이 저장소의 Actions를 실행할 수 있는 별도 토큰을 만드세요. fine-grained 토큰이면 Actions 읽기와 쓰기만 주세요.</p>
+  <div class="refresh-row">
+    <label>GitHub 토큰 <input id="token-input" type="password" autocomplete="off" spellcheck="false"></label>
+    <button type="button" id="save-token">이 탭에 저장</button>
+    <button type="button" id="clear-token">토큰 지우기</button>
+    <button type="button" id="refresh-balances">금액 다시 가져오기</button>
+  </div>
+  <p id="refresh-status"></p>
+</section>
+<script>
+(function () {
+  var STORAGE_KEY = "tilapia.githubToken";
+  var DISPATCH_URL = "https://api.github.com/repos/hrunj1230/tilapia/actions/workflows/balances.yml/dispatches";
+  var RUNS_URL = "https://api.github.com/repos/hrunj1230/tilapia/actions/workflows/balances.yml/runs?per_page=5";
+  var input = document.getElementById("token-input");
+  var statusEl = document.getElementById("refresh-status");
+  var refreshBtn = document.getElementById("refresh-balances");
+  var busy = false;
+
+  function setStatus(text) {
+    statusEl.textContent = text;
+  }
+
+  function readToken() {
+    try {
+      return sessionStorage.getItem(STORAGE_KEY) || "";
+    } catch (err) {
+      return "";
+    }
+  }
+
+  function showSavedState() {
+    if (readToken()) {
+      setStatus("이 탭에 토큰이 있습니다. 금액 다시 가져오기를 누르면 조회가 시작됩니다.");
+    }
+  }
+
+  document.getElementById("save-token").addEventListener("click", function () {
+    var value = (input.value || "").trim();
+    if (!value || /\s/.test(value)) {
+      setStatus("토큰을 입력하세요. 공백이 있으면 저장하지 않습니다.");
+      return;
+    }
+    try {
+      sessionStorage.setItem(STORAGE_KEY, value);
+    } catch (err) {
+      setStatus("이 탭에 토큰을 저장하지 못했습니다.");
+      return;
+    }
+    input.value = "";
+    setStatus("이 탭에 토큰을 저장했습니다. 페이지 주소와 저장소에는 넣지 않습니다.");
+  });
+
+  document.getElementById("clear-token").addEventListener("click", function () {
+    try {
+      sessionStorage.removeItem(STORAGE_KEY);
+    } catch (err) {}
+    input.value = "";
+    setStatus("이 탭의 토큰을 지웠습니다.");
+  });
+
+  function githubMessage(status) {
+    if (status === 401 || status === 403) {
+      return "토큰이 거부되었습니다. 이 저장소의 Actions 쓰기 권한이 있는 토큰을 다시 넣으세요.";
+    }
+    if (status === 404) {
+      return "워크플로를 찾지 못했습니다.";
+    }
+    return "요청이 거절되었습니다 (HTTP " + status + ").";
+  }
+
+  function safeRunUrl(url) {
+    if (typeof url === "string" && url.indexOf("https://github.com/hrunj1230/tilapia/actions/runs/") === 0) {
+      return url;
+    }
+    return "https://github.com/hrunj1230/tilapia/actions/workflows/balances.yml";
+  }
+
+  function wait(ms) {
+    return new Promise(function (resolve) { setTimeout(resolve, ms); });
+  }
+
+  function pickNewRun(runs, knownIds, startedMs, hadBaseline) {
+    var skew = hadBaseline ? 60000 : 5000;
+    for (var i = 0; i < runs.length; i++) {
+      var id = String(runs[i].id);
+      if (knownIds[id]) continue;
+      var created = Date.parse(runs[i].created_at || "");
+      if (isNaN(created) || created < startedMs - skew) continue;
+      if (!hadBaseline && runs[i].status === "completed" && created < startedMs) continue;
+      return runs[i];
+    }
+    return null;
+  }
+
+  async function pollSelected(pick) {
+    var deadline = Date.now() + 4 * 60 * 1000;
+    var trackedId = null;
+    while (Date.now() < deadline) {
+      var response = await fetch(RUNS_URL, {
+        headers: { "Accept": "application/vnd.github+json" },
+        cache: "no-store"
+      });
+      if (response.ok) {
+        var body = await response.json();
+        var runs = body.workflow_runs || [];
+        var match = null;
+        if (trackedId === null) {
+          match = pick(runs);
+          if (match) trackedId = String(match.id);
+        } else {
+          for (var i = 0; i < runs.length; i++) {
+            if (String(runs[i].id) === trackedId) {
+              match = runs[i];
+              break;
+            }
+          }
+        }
+        if (match && match.status === "completed") {
+          if (match.conclusion === "success") return match;
+          setStatus("조회가 실패했습니다. Actions 기록을 확인하세요. " + safeRunUrl(match.html_url));
+          return null;
+        }
+        if (trackedId !== null) {
+          setStatus("금액을 가져오는 중입니다. 끝나면 이 페이지를 다시 엽니다.");
+        }
+      }
+      await wait(5000);
+    }
+    setStatus("아직 끝나지 않았습니다. 잠시 뒤 페이지를 다시 여세요.");
+    return null;
+  }
+
+  async function waitForNewPage() {
+    var current = document.getElementById("generated-at").textContent;
+    var deadline = Date.now() + 2 * 60 * 1000;
+    while (Date.now() < deadline) {
+      var url = window.location.pathname + "?v=" + Date.now();
+      try {
+        var response = await fetch(url, { cache: "no-store" });
+        var text = await response.text();
+        var doc = new DOMParser().parseFromString(text, "text/html");
+        var next = doc.getElementById("generated-at");
+        if (next && next.textContent && next.textContent !== current) {
+          window.location.replace(url);
+          return;
+        }
+      } catch (err) {}
+      await wait(5000);
+    }
+    setStatus("조회는 끝났습니다. 페이지를 다시 열면 새 금액이 보입니다.");
+  }
+
+  refreshBtn.addEventListener("click", async function () {
+    if (busy) return;
+    var token = readToken();
+    if (!token) {
+      setStatus("이 탭에 토큰이 없습니다. Actions 쓰기 권한이 있는 GitHub 토큰을 입력하세요.");
+      input.focus();
+      return;
+    }
+    busy = true;
+    refreshBtn.disabled = true;
+    var startedMs = Date.now();
+    setStatus("조회를 요청하는 중입니다.");
+    try {
+      var knownIds = {};
+      var hadBaseline = false;
+      var active = null;
+      var runsResponse = await fetch(RUNS_URL, {
+        headers: { "Accept": "application/vnd.github+json" },
+        cache: "no-store"
+      });
+      if (runsResponse.ok) {
+        var existing = await runsResponse.json();
+        var existingRuns = existing.workflow_runs || [];
+        hadBaseline = true;
+        for (var i = 0; i < existingRuns.length; i++) {
+          knownIds[String(existingRuns[i].id)] = true;
+          if (!active && (existingRuns[i].status === "queued" || existingRuns[i].status === "in_progress")) {
+            active = existingRuns[i];
+          }
+        }
+        if (active) {
+          setStatus("이미 조회가 진행 중입니다. 끝나면 이 페이지를 다시 엽니다.");
+          var activeId = String(active.id);
+          var doneActive = await pollSelected(function (runs) {
+            for (var j = 0; j < runs.length; j++) {
+              if (String(runs[j].id) === activeId) return runs[j];
+            }
+            return null;
+          });
+          if (doneActive) await waitForNewPage();
+          return;
+        }
+      }
+      var response = await fetch(DISPATCH_URL, {
+        method: "POST",
+        headers: {
+          "Accept": "application/vnd.github+json",
+          "Authorization": "Bearer " + token,
+          "Content-Type": "application/json",
+          "X-GitHub-Api-Version": "2022-11-28"
+        },
+        body: JSON.stringify({ ref: "main" }),
+        redirect: "error"
+      });
+      if (response.status !== 204) {
+        setStatus(githubMessage(response.status));
+        return;
+      }
+      setStatus("조회를 시작했습니다. 끝나면 이 페이지를 다시 엽니다.");
+      var finished = await pollSelected(function (runs) {
+        return pickNewRun(runs, knownIds, startedMs, hadBaseline);
+      });
+      if (finished) await waitForNewPage();
+    } catch (err) {
+      setStatus("GitHub에 연결하지 못했습니다. 잠시 뒤 다시 누르세요.");
+    } finally {
+      busy = false;
+      refreshBtn.disabled = false;
+    }
+  });
+
+  showSavedState();
+})();
+</script>"""
+
+
 def render_html(data: Dict[str, Any]) -> str:
     """조회 결과 dict를 순수하게 받아 독립 실행 가능한 HTML 문자열을 생성합니다.
 
@@ -71,6 +350,7 @@ def render_html(data: Dict[str, Any]) -> str:
     - 허용된 표시 필드(balance, cost, error, note, scope 등)만 사용합니다.
     - 모든 외부 문자열은 html.escape 처리됩니다.
     """
+    page_refresh_markup = PAGE_REFRESH_MARKUP
     rp = data.get("runpod") or {}
     or_data = data.get("openrouter") or {}
     missing_secrets: List[str] = data.get("missingSecrets") or []
@@ -412,10 +692,12 @@ def render_html(data: Dict[str, Any]) -> str:
       <p>Runpod 선불 잔액과 OpenRouter 크레딧 요약</p>
     </div>
     <div class="meta-area">
-      <div>생성 시각: <strong>{gen_time_str}</strong></div>
-      <div>출처: GitHub Actions 자동 실행</div>
+      <div>생성 시각: <strong id="generated-at">{gen_time_str}</strong></div>
+      <div>출처: 페이지의 가져오기 버튼</div>
     </div>
   </header>
+
+  {page_refresh_markup}
 
   {missing_banner_html}
 
@@ -544,7 +826,7 @@ def render_html(data: Dict[str, Any]) -> str:
   </main>
 
   <footer>
-    <p>본 리포트는 저장소 시크릿을 통해 안전하게 빌드되었으며, 브라우저로 API 키 원문이 전달되지 않습니다.</p>
+    <p>본 리포트는 저장소 시크릿을 통해 안전하게 빌드되었으며, 브라우저로 API 키 원문이 전달되지 않습니다. 페이지에 입력한 GitHub 토큰은 이 브라우저 탭에만 남고, 리포트 파일에는 저장되지 않습니다.</p>
   </footer>
 
 </body>
