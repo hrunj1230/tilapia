@@ -412,7 +412,7 @@
   <header>
     <div class="title-area">
       <h1>Tilapia 모니터</h1>
-      <p>Runpod 선불 잔액, Langfuse 이번 달 추적 비용, OpenRouter 크레딧 대시보드</p>
+      <p>Runpod 선불 잔액과 OpenRouter 크레딧 대시보드</p>
     </div>
     <div class="controls-area">
       <div class="timer-info">
@@ -435,13 +435,6 @@
       </div>
 
       <div class="form-group">
-        <label for="hostInput">
-          <span>Langfuse 호스트</span>
-        </label>
-        <input type="text" id="hostInput" placeholder="https://cloud.langfuse.com">
-      </div>
-
-      <div class="form-group">
         <label>
           <span>Runpod API Key</span>
           <span id="rpKeyStatus" class="key-status unset">미설정</span>
@@ -449,28 +442,6 @@
         <div style="display: flex; gap: 4px;">
           <input type="password" id="rpKeyInput" placeholder="새 키 입력 (비워두면 기존 유지)" style="flex:1;">
           <button class="btn-danger" type="button" onclick="deleteKey('runpodApiKey')">삭제</button>
-        </div>
-      </div>
-
-      <div class="form-group">
-        <label>
-          <span>Langfuse Public Key</span>
-          <span id="lfPkStatus" class="key-status unset">미설정</span>
-        </label>
-        <div style="display: flex; gap: 4px;">
-          <input type="text" id="lfPkInput" placeholder="새 키 입력 (비워두면 기존 유지)" style="flex:1;">
-          <button class="btn-danger" type="button" onclick="deleteKey('langfusePublicKey')">삭제</button>
-        </div>
-      </div>
-
-      <div class="form-group">
-        <label>
-          <span>Langfuse Secret Key</span>
-          <span id="lfSkStatus" class="key-status unset">미설정</span>
-        </label>
-        <div style="display: flex; gap: 4px;">
-          <input type="password" id="lfSkInput" placeholder="새 키 입력 (비워두면 기존 유지)" style="flex:1;">
-          <button class="btn-danger" type="button" onclick="deleteKey('langfuseSecretKey')">삭제</button>
         </div>
       </div>
 
@@ -553,59 +524,6 @@
       </div>
     </article>
 
-    <!-- Langfuse 카드 -->
-    <article class="card" id="langfuseCard">
-      <div class="card-header">
-        <div class="card-title-group">
-          <h2>Langfuse</h2>
-          <div class="sub" id="lfProjectInfo">프로젝트 확인 중...</div>
-        </div>
-        <div id="lfStatusBadge" class="status-badge err">대기 중</div>
-      </div>
-
-      <div class="note-box" id="lfNoteBox">
-        ※ <strong>안내</strong>: Langfuse Cloud 공개 API에는 선불 잔액이나 청구서 잔액이 없습니다.
-        본 카드의 금액은 <strong>이번 달 추적된 LLM 비용</strong>(Metrics API observations.totalCost 합계)입니다.
-      </div>
-
-      <div id="lfErrorBox" class="error-box" style="display: none;"></div>
-
-      <div class="main-amount-block">
-        <div class="main-amount-label">이번 달 추적된 LLM 비용 (UTC 기준)</div>
-        <div class="main-amount-val">
-          <span id="lfMonthCostVal">-</span>
-          <span id="lfDiffTag" class="diff-tag diff-neutral"></span>
-        </div>
-      </div>
-
-      <div class="stats-grid">
-        <div class="stat-item">
-          <div class="label">오늘 추적 비용 (UTC)</div>
-          <div class="val" id="lfTodayCost">-</div>
-        </div>
-        <div class="stat-item">
-          <div class="label">프로젝트 개수</div>
-          <div class="val" id="lfProjectCount">-</div>
-        </div>
-      </div>
-
-      <div class="daily-section">
-        <h3>최근 14일 일별 추적 비용</h3>
-        <div id="lfDailyErrorBox" class="error-box" style="display: none; margin-bottom: 8px;"></div>
-        <table class="daily-table">
-          <thead>
-            <tr>
-              <th>날짜</th>
-              <th style="text-align: right;">비용 (USD)</th>
-            </tr>
-          </thead>
-          <tbody id="lfDailyTbody">
-            <tr><td colspan="2" class="empty-state">내역이 없습니다.</td></tr>
-          </tbody>
-        </table>
-      </div>
-    </article>
-
     <!-- OpenRouter 카드 -->
     <article class="card" id="openrouterCard">
       <div class="card-header">
@@ -656,7 +574,7 @@
       </div>
 
       <div class="daily-section">
-        <h3>최근 14일 일별 사용량</h3>
+        <h3>최근 30일 일별 사용량</h3>
         <div id="orDailyErrorBox" class="error-box" style="display: none; margin-bottom: 8px;"></div>
         <table class="daily-table">
           <thead>
@@ -667,7 +585,7 @@
             </tr>
           </thead>
           <tbody id="orDailyTbody">
-            <tr><td colspan="3" class="empty-state">내역이 없습니다.</td></tr>
+            <tr><td colspan="3" class="empty-state">최근 30일의 완료된 사용 내역이 없습니다.</td></tr>
           </tbody>
         </table>
       </div>
@@ -827,84 +745,7 @@
         }
       }
 
-      // 3. Langfuse 카드
-      const lf = data.langfuse || {};
-      const lfBadge = document.getElementById('lfStatusBadge');
-      const lfErrBox = document.getElementById('lfErrorBox');
-      const lfProjInfo = document.getElementById('lfProjectInfo');
-      const lfMonthCostEl = document.getElementById('lfMonthCostVal');
-      const lfDiffEl = document.getElementById('lfDiffTag');
-      const lfTodayCostEl = document.getElementById('lfTodayCost');
-      const lfProjCountEl = document.getElementById('lfProjectCount');
-      const lfDailyTbody = document.getElementById('lfDailyTbody');
-
-      if (lf.ok) {
-        lfBadge.textContent = '정상';
-        lfBadge.className = 'status-badge ok';
-        lfErrBox.style.display = 'none';
-      } else {
-        lfBadge.textContent = '오류';
-        lfBadge.className = 'status-badge err';
-        lfErrBox.textContent = lf.error || '오류가 발생했습니다.';
-        lfErrBox.style.display = 'block';
-      }
-
-      if (lf.projectName) {
-        lfProjInfo.textContent = `프로젝트: ${lf.projectName}`;
-      }
-      if (lf.monthCostUsd !== null && lf.monthCostUsd !== undefined) {
-        lfMonthCostEl.textContent = formatUsd(lf.monthCostUsd);
-      }
-      renderDiffTag(lfDiffEl, lf.diffFromPreviousUsd);
-
-      if (lf.todayCostUsd !== null && lf.todayCostUsd !== undefined) {
-        lfTodayCostEl.textContent = formatUsd(lf.todayCostUsd);
-      } else {
-        lfTodayCostEl.textContent = '-';
-      }
-      if (lf.projectCount !== null) lfProjCountEl.textContent = `${lf.projectCount}개`;
-
-      // Langfuse dailyError 및 daily 테이블 렌더링 (DOM API만 사용, innerHTML 금지)
-      const lfDailyErrBox = document.getElementById('lfDailyErrorBox');
-      if (lf.dailyError) {
-        lfDailyErrBox.textContent = lf.dailyError;
-        lfDailyErrBox.style.display = 'block';
-      } else {
-        lfDailyErrBox.textContent = '';
-        lfDailyErrBox.style.display = 'none';
-      }
-
-      while (lfDailyTbody.firstChild) {
-        lfDailyTbody.removeChild(lfDailyTbody.firstChild);
-      }
-
-      if (!lf.dailyError) {
-        if (lf.daily && lf.daily.length > 0) {
-          for (const item of lf.daily) {
-            const tr = document.createElement('tr');
-            const tdDate = document.createElement('td');
-            tdDate.textContent = item.date || '';
-
-            const tdAmt = document.createElement('td');
-            tdAmt.className = 'daily-amount';
-            tdAmt.textContent = formatUsd(item.amountUsd);
-
-            tr.appendChild(tdDate);
-            tr.appendChild(tdAmt);
-            lfDailyTbody.appendChild(tr);
-          }
-        } else {
-          const tr = document.createElement('tr');
-          const td = document.createElement('td');
-          td.colSpan = 2;
-          td.className = 'empty-state';
-          td.textContent = '내역이 없습니다.';
-          tr.appendChild(td);
-          lfDailyTbody.appendChild(tr);
-        }
-      }
-
-      // 4. OpenRouter 카드
+      // 3. OpenRouter 카드
       const or = data.openrouter || {};
       const orBadge = document.getElementById('orStatusBadge');
       const orScopeInfo = document.getElementById('orScopeInfo');
@@ -1017,6 +858,8 @@
         orKeyLimitEl.textContent = '무제한';
       } else if (or.keyLimitRemainingUsd !== null && or.keyLimitRemainingUsd !== undefined) {
         orKeyLimitEl.textContent = formatUsd(or.keyLimitRemainingUsd);
+      } else if (or.budgetRemainingUsd !== null && or.budgetRemainingUsd !== undefined) {
+        orKeyLimitEl.textContent = formatUsd(or.budgetRemainingUsd);
       } else {
         orKeyLimitEl.textContent = '-';
       }
@@ -1059,7 +902,7 @@
           const td = document.createElement('td');
           td.colSpan = 3;
           td.className = 'empty-state';
-          td.textContent = '내역이 없습니다.';
+          td.textContent = '최근 30일의 완료된 사용 내역이 없습니다.';
           tr.appendChild(td);
           orDailyTbody.appendChild(tr);
         }
@@ -1111,11 +954,8 @@
         const s = await res.json();
 
         document.getElementById('intervalInput').value = s.intervalMinutes || 5;
-        document.getElementById('hostInput').value = s.langfuseHost || 'https://cloud.langfuse.com';
 
         updateKeyStatus('rpKeyStatus', s.runpodApiKey);
-        updateKeyStatus('lfPkStatus', s.langfusePublicKey);
-        updateKeyStatus('lfSkStatus', s.langfuseSecretKey);
         updateKeyStatus('orKeyStatus', s.openrouterApiKey);
       } catch (err) {
         console.error('설정 로드 실패:', err);
@@ -1135,18 +975,12 @@
 
     async function saveSettings() {
       const intervalVal = parseInt(document.getElementById('intervalInput').value, 10);
-      const hostVal = document.getElementById('hostInput').value.trim();
       const rpKey = document.getElementById('rpKeyInput').value;
-      const lfPk = document.getElementById('lfPkInput').value;
-      const lfSk = document.getElementById('lfSkInput').value;
       const orKey = document.getElementById('openrouterKeyInput').value;
 
       const payload = {
         intervalMinutes: intervalVal,
-        langfuseHost: hostVal,
         runpodApiKey: rpKey,
-        langfusePublicKey: lfPk,
-        langfuseSecretKey: lfSk,
         openrouterApiKey: orKey,
       };
 
@@ -1165,8 +999,6 @@
 
         // 입력칸 비우기
         document.getElementById('rpKeyInput').value = '';
-        document.getElementById('lfPkInput').value = '';
-        document.getElementById('lfSkInput').value = '';
         document.getElementById('openrouterKeyInput').value = '';
 
         alert('설정이 저장되었습니다.');

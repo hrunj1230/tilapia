@@ -1,7 +1,7 @@
 """
 scripts/publish_balances.py - GitHub Actions에서 팀원과 공유할 금액 리포트를 생성하는 스크립트.
 
-기존 app.providers의 fetch_runpod, fetch_langfuse, fetch_openrouter를 재사용하여
+기존 app.providers의 fetch_runpod, fetch_openrouter를 재사용하여
 잔액 및 비용을 조회하고, dist/index.html 및 GITHUB_STEP_SUMMARY 마크다운 리포트를 만듭니다.
 보안 규칙:
 - 키 원문, Authorization 헤더, URL 쿼리의 키를 HTML, 마크다운, 표준 출력에 절대 출력하지 않습니다.
@@ -24,11 +24,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.providers import (
-    LANGFUSE_NOTE,
     OPENROUTER_ACCOUNT_NOTE,
     OPENROUTER_KEY_NOTE,
-    OPENROUTER_MANAGEMENT_KEY_REQUIRED_NOTE,
-    fetch_langfuse,
     fetch_openrouter,
     fetch_runpod,
 )
@@ -48,6 +45,17 @@ def format_usd(val: Any) -> str:
     return f"${int_part}.{frac_part} USD"
 
 
+def openrouter_limit_text(or_data: Dict[str, Any]) -> str:
+    """한도 칸. limit null은 무제한이고, 남은 한도가 없으면 effective budget을 쓴다."""
+    if or_data.get("keyLimitUnlimited") is True:
+        return "무제한"
+    if or_data.get("keyLimitRemainingUsd") is not None:
+        return format_usd(or_data.get("keyLimitRemainingUsd"))
+    if or_data.get("budgetRemainingUsd") is not None:
+        return format_usd(or_data.get("budgetRemainingUsd"))
+    return "-"
+
+
 def safe_escape(val: Any) -> str:
     """외부 문자열을 HTML 안전하게 이스케이프합니다."""
     if val is None:
@@ -64,7 +72,6 @@ def render_html(data: Dict[str, Any]) -> str:
     - 모든 외부 문자열은 html.escape 처리됩니다.
     """
     rp = data.get("runpod") or {}
-    lf = data.get("langfuse") or {}
     or_data = data.get("openrouter") or {}
     missing_secrets: List[str] = data.get("missingSecrets") or []
     gen_time_str = safe_escape(data.get("generatedAt") or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
@@ -86,20 +93,7 @@ def render_html(data: Dict[str, Any]) -> str:
     rp_email = safe_escape(rp.get("email"))
     rp_daily: List[Dict[str, Any]] = rp.get("daily") or []
 
-    # 2. Langfuse 데이터 가공
-    lf_ok = bool(lf.get("ok"))
-    lf_status_class = "ok" if lf_ok else "err"
-    lf_status_text = "정상" if lf_ok else "오류"
-    lf_month_cost = format_usd(lf.get("monthCostUsd"))
-    lf_today_cost = format_usd(lf.get("todayCostUsd"))
-    lf_error = safe_escape(lf.get("error"))
-    lf_daily_error = safe_escape(lf.get("dailyError"))
-    lf_project_name = safe_escape(lf.get("projectName"))
-    lf_project_count = safe_escape(lf.get("projectCount"))
-    lf_note = safe_escape(lf.get("note") or LANGFUSE_NOTE)
-    lf_daily: List[Dict[str, Any]] = lf.get("daily") or []
-
-    # 3. OpenRouter 데이터 가공
+    # 2. OpenRouter 데이터 가공
     or_ok = bool(or_data.get("ok"))
     or_status_class = "ok" if or_ok else "err"
     or_status_text = "정상" if or_ok else "오류"
@@ -132,10 +126,7 @@ def render_html(data: Dict[str, Any]) -> str:
     or_total_usage = format_usd(or_data.get("totalUsageUsd"))
     or_account_today = format_usd(or_data.get("todayUsageUsd"))
     or_key_today = format_usd(or_data.get("keyUsageDailyUsd"))
-    if or_data.get("keyLimitUnlimited") is True:
-        or_key_limit = "무제한"
-    else:
-        or_key_limit = format_usd(or_data.get("keyLimitRemainingUsd"))
+    or_key_limit = openrouter_limit_text(or_data)
     or_daily: List[Dict[str, Any]] = or_data.get("daily") or []
 
     # 미설정 시크릿 배너 조립
@@ -165,16 +156,6 @@ def render_html(data: Dict[str, Any]) -> str:
     else:
         rp_daily_rows_html = "<tr><td colspan='2' class='empty-state'>내역이 없습니다.</td></tr>"
 
-    # Langfuse 일별 테이블 HTML 조립
-    lf_daily_rows_html = ""
-    if lf_daily:
-        for row in lf_daily:
-            dt = safe_escape(row.get("date", ""))
-            amt = format_usd(row.get("amountUsd"))
-            lf_daily_rows_html += f"<tr><td>{dt}</td><td class='daily-amount'>{amt}</td></tr>"
-    else:
-        lf_daily_rows_html = "<tr><td colspan='2' class='empty-state'>내역이 없습니다.</td></tr>"
-
     # OpenRouter 일별 테이블 HTML 조립
     or_daily_rows_html = ""
     if or_daily:
@@ -187,7 +168,10 @@ def render_html(data: Dict[str, Any]) -> str:
                 f"<td class='daily-amount'>{b_amt}</td></tr>"
             )
     else:
-        or_daily_rows_html = "<tr><td colspan='3' class='empty-state'>내역이 없습니다.</td></tr>"
+        or_daily_rows_html = (
+            "<tr><td colspan='3' class='empty-state'>"
+            "최근 30일의 완료된 사용 내역이 없습니다.</td></tr>"
+        )
 
     return f"""<!DOCTYPE html>
 <html lang="ko">
@@ -425,7 +409,7 @@ def render_html(data: Dict[str, Any]) -> str:
   <header>
     <div class="title-area">
       <h1>Tilapia 잔액 & 비용 리포트</h1>
-      <p>Runpod 선불 잔액, Langfuse 이번 달 추적 비용, OpenRouter 크레딧 요약</p>
+      <p>Runpod 선불 잔액과 OpenRouter 크레딧 요약</p>
     </div>
     <div class="meta-area">
       <div>생성 시각: <strong>{gen_time_str}</strong></div>
@@ -493,55 +477,6 @@ def render_html(data: Dict[str, Any]) -> str:
       </div>
     </article>
 
-    <!-- Langfuse 카드 -->
-    <article class="card">
-      <div class="card-header">
-        <div class="card-title-group">
-          <h2>Langfuse</h2>
-          <div class="sub">{f"프로젝트: {lf_project_name}" if lf_project_name else "LLM 옵저버빌리티 비용"}</div>
-        </div>
-        <div class="status-badge {lf_status_class}">{lf_status_text}</div>
-      </div>
-
-      <div class="note-box">
-        ※ <strong>안내</strong>: {lf_note}
-      </div>
-
-      {f'<div class="error-box">오류: {lf_error}</div>' if lf_error else ''}
-      {f'<div class="error-box">일별 오류: {lf_daily_error}</div>' if lf_daily_error else ''}
-
-      <div class="main-amount-block">
-        <div class="main-amount-label">이번 달 추적된 LLM 비용 (UTC 기준)</div>
-        <div class="main-amount-val">{lf_month_cost}</div>
-      </div>
-
-      <div class="stats-grid">
-        <div class="stat-item">
-          <div class="label">오늘 추적 비용 (UTC)</div>
-          <div class="val">{lf_today_cost}</div>
-        </div>
-        <div class="stat-item">
-          <div class="label">프로젝트 개수</div>
-          <div class="val">{f"{lf_project_count}개" if lf_project_count else "-"}</div>
-        </div>
-      </div>
-
-      <div class="daily-section">
-        <h3>최근 14일 일별 추적 비용</h3>
-        <table class="daily-table">
-          <thead>
-            <tr>
-              <th>날짜</th>
-              <th style="text-align: right;">비용 (USD)</th>
-            </tr>
-          </thead>
-          <tbody>
-            {lf_daily_rows_html}
-          </tbody>
-        </table>
-      </div>
-    </article>
-
     <!-- OpenRouter 카드 -->
     <article class="card">
       <div class="card-header">
@@ -590,7 +525,7 @@ def render_html(data: Dict[str, Any]) -> str:
       </div>
 
       <div class="daily-section">
-        <h3>최근 14일 일별 사용량</h3>
+        <h3>최근 30일 일별 사용량</h3>
         <table class="daily-table">
           <thead>
             <tr>
@@ -620,7 +555,6 @@ def render_html(data: Dict[str, Any]) -> str:
 def render_markdown(data: Dict[str, Any]) -> str:
     """조회 결과 dict를 순수하게 받아 GitHub Step Summary용 마크다운 문자열을 생성합니다."""
     rp = data.get("runpod") or {}
-    lf = data.get("langfuse") or {}
     or_data = data.get("openrouter") or {}
     missing_secrets: List[str] = data.get("missingSecrets") or []
     gen_time_str = safe_escape(data.get("generatedAt") or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC"))
@@ -662,28 +596,10 @@ def render_markdown(data: Dict[str, Any]) -> str:
         lines.append(f"- ⚠️ **일별 요금 오류**: `{safe_escape(rp.get('chargesError'))}`")
     lines.append("")
 
-    # 2. Langfuse
-    lf_ok = bool(lf.get("ok"))
-    lf_month_cost = format_usd(lf.get("monthCostUsd"))
-    lf_today_cost = format_usd(lf.get("todayCostUsd"))
-    lines.append(f"## 2. Langfuse ({'🟢 정상' if lf_ok else '🔴 오류'})")
-    if lf.get("projectName"):
-        lines.append(f"- **프로젝트**: `{safe_escape(lf.get('projectName'))}`")
-    lines.append(f"- **이번 달 추적된 LLM 비용 (UTC)**: **`{lf_month_cost}`**")
-    lines.append(f"- **오늘 추적 비용 (UTC)**: `{lf_today_cost}`")
-    if lf.get("projectCount") is not None:
-        lines.append(f"- 프로젝트 개수: `{safe_escape(lf.get('projectCount'))}개`")
-    lines.append(f"> ℹ️ *{safe_escape(lf.get('note') or LANGFUSE_NOTE)}*")
-    if lf.get("error"):
-        lines.append(f"- 🔴 **오류**: `{safe_escape(lf.get('error'))}`")
-    if lf.get("dailyError"):
-        lines.append(f"- ⚠️ **일별 오류**: `{safe_escape(lf.get('dailyError'))}`")
-    lines.append("")
-
-    # 3. OpenRouter
+    # 2. OpenRouter
     or_ok = bool(or_data.get("ok"))
     or_scope = or_data.get("scope")
-    lines.append(f"## 3. OpenRouter ({'🟢 정상' if or_ok else '🔴 오류'})")
+    lines.append(f"## 2. OpenRouter ({'🟢 정상' if or_ok else '🔴 오류'})")
     if or_scope == "account":
         lines.append("- **모드**: `Management 키 (계정 모드)`")
         lines.append(f"- **남은 크레딧**: **`{format_usd(or_data.get('remainingUsd'))}`**")
@@ -691,18 +607,18 @@ def render_markdown(data: Dict[str, Any]) -> str:
         lines.append(f"- 누적 사용 (Total Usage): `{format_usd(or_data.get('totalUsageUsd'))}`")
         if or_data.get("todayUsageUsd") is not None:
             lines.append(f"- 오늘 계정 사용 (UTC): `{format_usd(or_data.get('todayUsageUsd'))}`")
+        lines.append(f"- 이 키의 남은 한도: `{openrouter_limit_text(or_data)}`")
         lines.append(f"> ℹ️ *{safe_escape(or_data.get('note') or OPENROUTER_ACCOUNT_NOTE)}*")
     elif or_scope == "key":
         lines.append("- **모드**: `추론용 키 (키 제한 모드)`")
         if or_data.get("keyLimitRemainingUsd") is not None:
             lines.append(f"- **이 키의 남은 한도**: **`{format_usd(or_data.get('keyLimitRemainingUsd'))}`**")
+        elif or_data.get("budgetRemainingUsd") is not None:
+            lines.append(f"- **이 키의 남은 한도**: **`{format_usd(or_data.get('budgetRemainingUsd'))}`**")
         else:
             lines.append(f"- **이 키의 이번 달 사용**: **`{format_usd(or_data.get('keyUsageMonthlyUsd'))}`**")
         lines.append(f"- 이 키의 오늘 사용: `{format_usd(or_data.get('keyUsageDailyUsd'))}`")
-        if or_data.get("keyLimitUnlimited") is True:
-            lines.append("- 이 키의 한도 설정: `무제한`")
-        elif or_data.get("keyLimitRemainingUsd") is not None:
-            lines.append(f"- 이 키의 남은 한도: `{format_usd(or_data.get('keyLimitRemainingUsd'))}`")
+        lines.append(f"- 이 키의 남은 한도: `{openrouter_limit_text(or_data)}`")
         lines.append(f"> ℹ️ *{safe_escape(or_data.get('keyNote') or OPENROUTER_KEY_NOTE)}*")
     else:
         lines.append(f"- **남은 크레딧**: **`{format_usd(or_data.get('remainingUsd'))}`**")
@@ -732,35 +648,20 @@ async def collect_balances(
     missing_secrets: List[str] = []
     if not settings.runpod_api_key or not settings.runpod_api_key.strip():
         missing_secrets.append("RUNPOD_API_KEY")
-    if not settings.langfuse_public_key or not settings.langfuse_public_key.strip():
-        missing_secrets.append("LANGFUSE_PUBLIC_KEY")
-    if not settings.langfuse_secret_key or not settings.langfuse_secret_key.strip():
-        missing_secrets.append("LANGFUSE_SECRET_KEY")
     if not settings.openrouter_api_key or not settings.openrouter_api_key.strip():
         missing_secrets.append("OPENROUTER_API_KEY")
 
     rp_coro = fetch_runpod(settings.runpod_api_key, client=client)
-    lf_coro = fetch_langfuse(
-        host=settings.langfuse_host,
-        public_key=settings.langfuse_public_key,
-        secret_key=settings.langfuse_secret_key,
-        client=client,
-    )
     or_coro = fetch_openrouter(settings.openrouter_api_key, client=client)
 
-    rp_res, lf_res, or_res = await asyncio.gather(
-        rp_coro, lf_coro, or_coro, return_exceptions=True
+    rp_res, or_res = await asyncio.gather(
+        rp_coro, or_coro, return_exceptions=True
     )
 
     if isinstance(rp_res, Exception):
         rp_data = {"ok": False, "error": f"Runpod 조회 예외: {type(rp_res).__name__}"}
     else:
         rp_data = rp_res
-
-    if isinstance(lf_res, Exception):
-        lf_data = {"ok": False, "error": f"Langfuse 조회 예외: {type(lf_res).__name__}"}
-    else:
-        lf_data = lf_res
 
     if isinstance(or_res, Exception):
         or_data = {"ok": False, "error": f"OpenRouter 조회 예외: {type(or_res).__name__}"}
@@ -771,7 +672,6 @@ async def collect_balances(
 
     return {
         "runpod": rp_data,
-        "langfuse": lf_data,
         "openrouter": or_data,
         "missingSecrets": missing_secrets,
         "generatedAt": now_utc,

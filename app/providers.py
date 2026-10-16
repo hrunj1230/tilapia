@@ -43,6 +43,88 @@ def _has_known_cost_field(row: Dict[str, Any]) -> bool:
     )
 
 
+def _clean_secret(value: Optional[str]) -> str:
+    """시크릿 앞뒤 공백, 감싼 따옴표, Bearer 접두, 줄바꿈을 제거합니다. 원문은 로그에 남기지 않습니다."""
+    if value is None:
+        return ""
+    text = str(value).strip()
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in "\"'":
+        text = text[1:-1].strip()
+    if text[:7].lower() == "bearer ":
+        text = text[7:].strip()
+    return "".join(text.split())
+
+
+LANGFUSE_REGION_HOSTS = (
+    "https://cloud.langfuse.com",
+    "https://us.cloud.langfuse.com",
+    "https://eu.cloud.langfuse.com",
+    "https://jp.cloud.langfuse.com",
+    "https://hipaa.cloud.langfuse.com",
+)
+RUNPOD_MYSELF_QUERY = (
+    "query { myself { id email clientBalance currentSpendPerHr "
+    "clientLifetimeSpend underBalance minBalance creditAlertThreshold } }"
+)
+RUNPOD_MYSELF_MIN_QUERY = (
+    "query { myself { clientBalance currentSpendPerHr clientLifetimeSpend "
+    "underBalance minBalance creditAlertThreshold } }"
+)
+
+
+def _langfuse_candidate_hosts(preferred: str) -> List[str]:
+    hosts: List[str] = []
+    for host in (preferred, *LANGFUSE_REGION_HOSTS):
+        if host not in hosts:
+            hosts.append(host)
+    return hosts
+
+
+def _graphql_unauthorized(response: httpx.Response) -> bool:
+    if response.status_code == 401:
+        return True
+    if response.status_code != 200:
+        return False
+    try:
+        body = response.json()
+    except Exception:
+        return False
+    errors = body.get("errors") if isinstance(body, dict) else None
+    if not isinstance(errors, list):
+        return False
+    for err in errors:
+        message = str(err.get("message", err) if isinstance(err, dict) else err)
+        if "unauthorized" in message.lower():
+            return True
+    return False
+
+
+def _usable_myself(response: httpx.Response) -> Optional[Dict[str, Any]]:
+    """clientBalance가 숫자인 myself만 사용한다. 일부 필드 오류는 잔액을 지우지 않는다."""
+    if response.status_code != 200:
+        return None
+    try:
+        body = response.json()
+    except Exception:
+        return None
+    if not isinstance(body, dict):
+        return None
+    data = body.get("data")
+    if not isinstance(data, dict):
+        return None
+    myself = data.get("myself")
+    if not isinstance(myself, dict):
+        return None
+    balance = myself.get("clientBalance")
+    if isinstance(balance, bool) or balance is None:
+        return None
+    try:
+        float(balance)
+    except (TypeError, ValueError):
+        return None
+    return myself
+
+
 async def fetch_runpod(
     api_key: Optional[str],
     client: Optional[httpx.AsyncClient] = None,
@@ -55,7 +137,8 @@ async def fetch_runpod(
     - GraphQL 잔액 조회가 성공하고 GET /v2/billing 이 200이 아니면 ok는 true,
       balanceUsd 등 잔액 필드는 유지, chargesError 문자열 저장, daily는 빈 배열.
     """
-    if not api_key or not api_key.strip():
+    key = _clean_secret(api_key)
+    if not key:
         return {
             "ok": False,
             "error": "API 키가 없습니다",
@@ -70,10 +153,11 @@ async def fetch_runpod(
             "daily": [],
         }
 
-    key = api_key.strip()
     headers = {
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
+        "Accept": "application/json",
+        "User-Agent": "tilapia-balance-monitor",
     }
 
     own_client = False
@@ -82,65 +166,75 @@ async def fetch_runpod(
         own_client = True
 
     try:
-        # 1. GraphQL myself 조회 (API 키는 URL 쿼리가 아닌 헤더에만 전달)
-        gql_query = {
-            "query": "query { myself { id email clientBalance currentSpendPerHr clientLifetimeSpend underBalance minBalance creditAlertThreshold } }"
-        }
+        # 1. GraphQL myself 조회. 키는 URL이 아니라 Authorization 헤더에만 둔다.
+        #    잔액이 있으면 일부 필드 오류는 무시한다. 잔액이 없고 Unauthorized면 잔액 필드만 다시 조회한다.
         res_gql = await client.post(
             "https://api.runpod.io/graphql",
             headers=headers,
-            json=gql_query,
+            json={"query": RUNPOD_MYSELF_QUERY},
         )
+        myself = _usable_myself(res_gql)
+        if myself is None and _graphql_unauthorized(res_gql):
+            res_gql = await client.post(
+                "https://api.runpod.io/graphql",
+                headers=headers,
+                json={"query": RUNPOD_MYSELF_MIN_QUERY},
+            )
+            myself = _usable_myself(res_gql)
 
-        if res_gql.status_code == 429:
-            return {
-                "ok": False,
-                "error": "요청 한도 초과 (HTTP 429)",
-                "chargesError": None,
-                "email": None,
-                "balanceUsd": None,
-                "spendPerHourUsd": None,
-                "lifetimeSpendUsd": None,
-                "underBalance": None,
-                "minBalanceUsd": None,
-                "alertThresholdUsd": None,
-                "daily": [],
-            }
+        if myself is None:
+            if res_gql.status_code == 429:
+                return {
+                    "ok": False,
+                    "error": "요청 한도 초과 (HTTP 429)",
+                    "chargesError": None,
+                    "email": None,
+                    "balanceUsd": None,
+                    "spendPerHourUsd": None,
+                    "lifetimeSpendUsd": None,
+                    "underBalance": None,
+                    "minBalanceUsd": None,
+                    "alertThresholdUsd": None,
+                    "daily": [],
+                }
 
-        if res_gql.status_code != 200:
-            return {
-                "ok": False,
-                "error": f"Runpod GraphQL HTTP 오류 ({res_gql.status_code})",
-                "chargesError": None,
-                "email": None,
-                "balanceUsd": None,
-                "spendPerHourUsd": None,
-                "lifetimeSpendUsd": None,
-                "underBalance": None,
-                "minBalanceUsd": None,
-                "alertThresholdUsd": None,
-                "daily": [],
-            }
+            if res_gql.status_code != 200:
+                return {
+                    "ok": False,
+                    "error": f"Runpod GraphQL HTTP 오류 ({res_gql.status_code})",
+                    "chargesError": None,
+                    "email": None,
+                    "balanceUsd": None,
+                    "spendPerHourUsd": None,
+                    "lifetimeSpendUsd": None,
+                    "underBalance": None,
+                    "minBalanceUsd": None,
+                    "alertThresholdUsd": None,
+                    "daily": [],
+                }
 
-        gql_data = res_gql.json()
-        if "errors" in gql_data and gql_data["errors"]:
-            err_msg = "; ".join(str(e.get("message", e)) for e in gql_data["errors"])
-            return {
-                "ok": False,
-                "error": f"Runpod GraphQL 오류: {err_msg}",
-                "chargesError": None,
-                "email": None,
-                "balanceUsd": None,
-                "spendPerHourUsd": None,
-                "lifetimeSpendUsd": None,
-                "underBalance": None,
-                "minBalanceUsd": None,
-                "alertThresholdUsd": None,
-                "daily": [],
-            }
+            gql_data = res_gql.json()
+            if isinstance(gql_data, dict) and gql_data.get("errors"):
+                err_msg = "; ".join(str(e.get("message", e)) for e in gql_data["errors"])
+                if "unauthorized" in err_msg.lower():
+                    err_msg = (
+                        "API 키가 거부되었습니다. GitHub Actions의 RUNPOD_API_KEY에 "
+                        "Runpod 콘솔 API Keys 값을 따옴표나 Bearer 없이 다시 넣으세요."
+                    )
+                return {
+                    "ok": False,
+                    "error": f"Runpod GraphQL 오류: {err_msg}",
+                    "chargesError": None,
+                    "email": None,
+                    "balanceUsd": None,
+                    "spendPerHourUsd": None,
+                    "lifetimeSpendUsd": None,
+                    "underBalance": None,
+                    "minBalanceUsd": None,
+                    "alertThresholdUsd": None,
+                    "daily": [],
+                }
 
-        data_obj = gql_data.get("data")
-        if not data_obj or not data_obj.get("myself"):
             return {
                 "ok": False,
                 "error": "Runpod data.myself 가 응답에 없습니다",
@@ -154,8 +248,6 @@ async def fetch_runpod(
                 "alertThresholdUsd": None,
                 "daily": [],
             }
-
-        myself = data_obj["myself"]
 
         # 2. 일별 요금 조회: GET https://api.runpod.io/v2/billing?bucketSize=day&lastN=14
         billing_headers = {
@@ -268,7 +360,9 @@ async def fetch_langfuse(
     - 이번달 조회가 실패하면 ok false.
     - 빈 data는 여전히 0이고 오류가 아님.
     """
-    if not public_key or not public_key.strip() or not secret_key or not secret_key.strip():
+    public_key = _clean_secret(public_key)
+    secret_key = _clean_secret(secret_key)
+    if not public_key or not secret_key:
         return {
             "ok": False,
             "error": "API 키가 없습니다",
@@ -296,15 +390,50 @@ async def fetch_langfuse(
             "daily": [],
         }
 
-    auth = httpx.BasicAuth(public_key.strip(), secret_key.strip())
+    auth = httpx.BasicAuth(public_key, secret_key)
     own_client = False
     if client is None:
         client = httpx.AsyncClient(timeout=TIMEOUT_SECONDS)
         own_client = True
 
     try:
-        # 1. 프로젝트 정보 조회
-        res_proj = await client.get(f"{valid_host}/api/public/projects", auth=auth)
+        # 1. 프로젝트 정보 조회. 기본 호스트가 401이면 허용된 리전을 순서대로 시도한다.
+        res_proj = None
+        auth_rejected = 0
+        for candidate in _langfuse_candidate_hosts(valid_host):
+            try:
+                probed = await client.get(
+                    f"{candidate}/api/public/projects",
+                    auth=auth,
+                )
+            except Exception:
+                continue
+            if probed.status_code == 200:
+                valid_host = candidate
+                res_proj = probed
+                break
+            if probed.status_code == 429:
+                res_proj = probed
+                break
+            if probed.status_code in (401, 403):
+                auth_rejected += 1
+                res_proj = probed
+                continue
+            res_proj = probed
+            break
+
+        if res_proj is None:
+            return {
+                "ok": False,
+                "error": "Langfuse 프로젝트 조회에 연결하지 못했습니다",
+                "dailyError": None,
+                "projectName": None,
+                "projectCount": None,
+                "monthCostUsd": None,
+                "todayCostUsd": None,
+                "note": LANGFUSE_NOTE,
+                "daily": [],
+            }
         if res_proj.status_code == 429:
             return {
                 "ok": False,
@@ -318,9 +447,12 @@ async def fetch_langfuse(
                 "daily": [],
             }
         if res_proj.status_code != 200:
+            region_note = ""
+            if auth_rejected > 1:
+                region_note = " 허용된 Langfuse 리전을 모두 확인했습니다. 키 쌍을 다시 등록하세요."
             return {
                 "ok": False,
-                "error": f"Langfuse 프로젝트 조회 HTTP 오류 ({res_proj.status_code})",
+                "error": f"Langfuse 프로젝트 조회 HTTP 오류 ({res_proj.status_code}).{region_note}",
                 "dailyError": None,
                 "projectName": None,
                 "projectCount": None,
@@ -509,7 +641,8 @@ async def fetch_openrouter(
     - GET /api/v1/credits, GET /api/v1/activity, GET /api/v1/key 동시 호출.
     - 리다이렉트 응답(3xx)은 실패로 처리.
     """
-    if not api_key or not api_key.strip():
+    key = _clean_secret(api_key)
+    if not key:
         return {
             "ok": False,
             "error": "API 키가 없습니다",
@@ -536,7 +669,6 @@ async def fetch_openrouter(
             "snapshotBasis": None,
         }
 
-    key = api_key.strip()
     headers = {
         "Authorization": f"Bearer {key}",
     }
@@ -579,6 +711,7 @@ async def fetch_openrouter(
         key_limit_remaining_usd = None
         key_limit_unlimited = False
         is_management_key = None
+        budget_remaining_usd = None
         key_status = None
 
         if isinstance(res_key, Exception):
@@ -625,6 +758,12 @@ async def fetch_openrouter(
                         key_limit_remaining_usd = round(float(lim_rem), 4)
                     else:
                         key_limit_remaining_usd = None
+
+                    budget = key_data.get("effective_budget")
+                    if isinstance(budget, dict) and _is_number(budget.get("remaining_usd")):
+                        budget_remaining_usd = round(float(budget["remaining_usd"]), 4)
+                    else:
+                        budget_remaining_usd = None
 
                     is_mgmt = key_data.get("is_management_key")
                     is_management_key = is_mgmt if isinstance(is_mgmt, bool) else None
@@ -713,7 +852,8 @@ async def fetch_openrouter(
                         daily_list = []
                     else:
                         today_utc = datetime.now(timezone.utc).date()
-                        min_date = today_utc - timedelta(days=13)
+                        # activity의 최근 30 완료일이 잘리지 않도록 오늘과 그 이전 30일을 남긴다.
+                        min_date = today_utc - timedelta(days=30)
                         date_map = {}
                         has_format_error = False
 
@@ -742,7 +882,6 @@ async def fetch_openrouter(
                             except ValueError:
                                 continue
 
-                            # UTC 오늘 포함 14일 창만 남김 (오늘-13일 이상, 오늘 이하)
                             if min_date <= d_obj <= today_utc:
                                 if d_str not in date_map:
                                     date_map[d_str] = {"usage": 0.0, "byok": 0.0}
@@ -790,6 +929,7 @@ async def fetch_openrouter(
                 "keyLimitUsd": key_limit_usd,
                 "keyLimitRemainingUsd": key_limit_remaining_usd,
                 "keyLimitUnlimited": key_limit_unlimited,
+                "budgetRemainingUsd": budget_remaining_usd,
                 "isManagementKey": is_management_key,
                 "keyNote": OPENROUTER_KEY_NOTE if key_ok else None,
                 "keyError": key_error if not key_ok else None,
@@ -824,6 +964,7 @@ async def fetch_openrouter(
                 "keyLimitUsd": key_limit_usd,
                 "keyLimitRemainingUsd": key_limit_remaining_usd,
                 "keyLimitUnlimited": key_limit_unlimited,
+                "budgetRemainingUsd": budget_remaining_usd,
                 "isManagementKey": is_management_key,
                 "keyNote": OPENROUTER_KEY_NOTE,
                 "keyError": None,

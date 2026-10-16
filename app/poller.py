@@ -5,13 +5,13 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 import httpx
 
-from app.providers import LANGFUSE_NOTE, fetch_langfuse, fetch_runpod, fetch_openrouter
+from app.providers import fetch_runpod, fetch_openrouter
 from app.settings import SettingsManager
 from app.store import BalanceStore
 
 
 class Poller:
-    """Runpod, Langfuse 및 OpenRouter 데이터 주기적 / 즉시 조회 및 상태 관리자.
+    """Runpod와 OpenRouter 데이터 주기적 / 즉시 조회 및 상태 관리자.
 
     - 프로세스 시작 직후 1회 조회, 이후 intervalMinutes 마다 자동 조회.
     - 지금 조회 버튼 (refresh)과 자동 주기는 동일한 조회 로직 공유.
@@ -32,7 +32,6 @@ class Poller:
 
         # 마지막 성공 값 저장소
         self.last_successful_runpod: Optional[Dict[str, Any]] = None
-        self.last_successful_langfuse: Optional[Dict[str, Any]] = None
         self.last_successful_openrouter: Optional[Dict[str, Any]] = None
 
         # 현재 상태
@@ -40,18 +39,6 @@ class Poller:
             "refreshedAt": None,
             "nextRefreshAt": None,
             "intervalMinutes": self.settings_mgr.interval_minutes,
-            "langfuse": {
-                "ok": False,
-                "error": "아직 조회되지 않았습니다",
-                "dailyError": None,
-                "projectName": None,
-                "projectCount": None,
-                "monthCostUsd": None,
-                "todayCostUsd": None,
-                "note": LANGFUSE_NOTE,
-                "daily": [],
-                "diffFromPreviousUsd": None,
-            },
             "runpod": {
                 "ok": False,
                 "error": "아직 조회되지 않았습니다",
@@ -110,15 +97,8 @@ class Poller:
 
     async def _poll_both(self) -> Dict[str, Any]:
         """서비스들의 데이터를 조회하고 상태를 갱신합니다."""
-        # Runpod, Langfuse 및 OpenRouter 동시 호출
         rp_coro = fetch_runpod(
             api_key=self.settings_mgr.runpod_api_key,
-            client=self.client,
-        )
-        lf_coro = fetch_langfuse(
-            host=self.settings_mgr.langfuse_host,
-            public_key=self.settings_mgr.langfuse_public_key,
-            secret_key=self.settings_mgr.langfuse_secret_key,
             client=self.client,
         )
         or_coro = fetch_openrouter(
@@ -126,8 +106,8 @@ class Poller:
             client=self.client,
         )
 
-        rp_res, lf_res, or_res = await asyncio.gather(
-            rp_coro, lf_coro, or_coro, return_exceptions=True
+        rp_res, or_res = await asyncio.gather(
+            rp_coro, or_coro, return_exceptions=True
         )
 
         # 1. Runpod 결과 처리
@@ -169,42 +149,7 @@ class Poller:
                 final_rp = rp_result
                 final_rp["diffFromPreviousUsd"] = None
 
-        # 2. Langfuse 결과 처리
-        if isinstance(lf_res, Exception):
-            lf_result = {
-                "ok": False,
-                "error": f"Langfuse 조회 중 예외 발생: {type(lf_res).__name__}",
-                "dailyError": None,
-                "projectName": None,
-                "projectCount": None,
-                "monthCostUsd": None,
-                "todayCostUsd": None,
-                "note": LANGFUSE_NOTE,
-                "daily": [],
-            }
-        else:
-            lf_result = lf_res
-
-        if lf_result["ok"]:
-            current_cost = lf_result.get("monthCostUsd")
-            diff = self.store.get_diff_from_previous("langfuse", current_cost)
-            lf_result["diffFromPreviousUsd"] = diff
-
-            self.store.save_snapshot("langfuse", current_cost, lf_result)
-            self.last_successful_langfuse = copy.deepcopy(lf_result)
-            final_lf = lf_result
-        else:
-            # 실패 시: 이전 성공 값 유지, 오류 문구 표기
-            if self.last_successful_langfuse is not None:
-                final_lf = copy.deepcopy(self.last_successful_langfuse)
-                final_lf["ok"] = False
-                final_lf["error"] = lf_result.get("error") or "조회 실패"
-                final_lf["dailyError"] = lf_result.get("dailyError")
-            else:
-                final_lf = lf_result
-                final_lf["diffFromPreviousUsd"] = None
-
-        # 3. OpenRouter 결과 처리
+        # 2. OpenRouter 결과 처리
         if isinstance(or_res, Exception):
             or_result = {
                 "ok": False,
@@ -271,7 +216,6 @@ class Poller:
             "refreshedAt": now_utc.isoformat(),
             "nextRefreshAt": next_utc.isoformat(),
             "intervalMinutes": self.settings_mgr.interval_minutes,
-            "langfuse": final_lf,
             "runpod": final_rp,
             "openrouter": final_or,
         }

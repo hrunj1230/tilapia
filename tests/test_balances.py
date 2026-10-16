@@ -125,6 +125,68 @@ def test_runpod_graphql_errors_and_empty_myself():
     asyncio.run(run())
 
 
+def test_runpod_partial_unauthorized_keeps_balance_without_query_key():
+    async def run():
+        seen = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            url = str(request.url)
+            if "graphql" in url:
+                return httpx.Response(
+                    200,
+                    json={
+                        "errors": [{"message": "Unauthorized", "path": ["myself", "email"]}],
+                        "data": {"myself": {"clientBalance": 42.0}},
+                    },
+                )
+            if "v2/billing" in url:
+                return httpx.Response(200, json={"records": []})
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            res = await fetch_runpod(api_key="valid-key", client=client)
+
+        assert res["ok"] is True
+        assert res["balanceUsd"] == 42.0
+        assert len(seen) == 2
+        for req in seen:
+            assert "api_key" not in req.url.query.decode("utf-8")
+            assert req.headers.get("Authorization") == "Bearer valid-key"
+
+    asyncio.run(run())
+
+
+def test_runpod_unauthorized_without_balance_retries_min_query_once():
+    async def run():
+        graphql_calls = 0
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            nonlocal graphql_calls
+            url = str(request.url)
+            assert "api_key" not in str(request.url)
+            if "graphql" in url:
+                graphql_calls += 1
+                return httpx.Response(
+                    200,
+                    json={"errors": [{"message": "Unauthorized"}], "data": None},
+                )
+            return httpx.Response(404)
+
+        transport = httpx.MockTransport(handler)
+        async with httpx.AsyncClient(transport=transport) as client:
+            res = await fetch_runpod(api_key="valid-key", client=client)
+
+        assert graphql_calls == 2
+        assert res["ok"] is False
+        assert "Runpod GraphQL 오류" in res["error"]
+        assert "거부" in res["error"]
+        assert res["balanceUsd"] is None
+
+    asyncio.run(run())
+
+
 # --------------------------------------------------------------------------
 # 3. Langfuse sum_totalCost 와 totalCost_sum 둘 다 합산
 # --------------------------------------------------------------------------
@@ -371,29 +433,20 @@ def test_one_provider_failure_does_not_clear_other_provider_success(tmp_path: Pa
         st1 = await poller.refresh()
         assert st1["runpod"]["ok"] is True
         assert st1["runpod"]["balanceUsd"] == 100.0
-        assert st1["langfuse"]["ok"] is True
-        assert st1["langfuse"]["monthCostUsd"] == 30.0
+        assert "langfuse" not in st1
 
-        # 2회차 실행: Runpod 실패, Langfuse 성공
+        # 2회차 실행: Runpod 실패. 이전 성공 금액 $100.0 은 보존되어야 함
         cycle = 2
         st2 = await poller.refresh()
-        # Runpod는 실패 상태이지만, 이전 성공 금액 $100.0 은 보존되어야 함!
         assert st2["runpod"]["ok"] is False
         assert st2["runpod"]["error"] is not None
         assert st2["runpod"]["balanceUsd"] == 100.0
-        # Langfuse는 여전히 성공
-        assert st2["langfuse"]["ok"] is True
-        assert st2["langfuse"]["monthCostUsd"] == 30.0
 
-        # 3회차 실행: Runpod 복구, Langfuse 429 실패
+        # 3회차 실행: Runpod 복구
         cycle = 3
         st3 = await poller.refresh()
         assert st3["runpod"]["ok"] is True
         assert st3["runpod"]["balanceUsd"] == 100.0
-        # Langfuse는 429로 실패했으나 프로세스 죽지 않고 이전 성공 값 $30.0 유지
-        assert st3["langfuse"]["ok"] is False
-        assert "429" in st3["langfuse"]["error"]
-        assert st3["langfuse"]["monthCostUsd"] == 30.0
 
         await mock_client.aclose()
 
@@ -570,7 +623,7 @@ def test_runpod_request_url_has_no_api_key_query_and_has_bearer_authorization():
 
         transport = httpx.MockTransport(handler)
         async with httpx.AsyncClient(transport=transport) as client:
-            await fetch_runpod(api_key="valid-key", client=client)
+            await fetch_runpod(api_key='  "Bearer valid-key"\n', client=client)
 
         assert len(seen_requests) == 2
         for req in seen_requests:
@@ -724,7 +777,8 @@ def test_refresh_during_chained_poll_returns_status(tmp_path: Path):
             assert isinstance(r, dict)
             assert r is not None
             assert "runpod" in r
-            assert "langfuse" in r
+            assert "openrouter" in r
+            assert "langfuse" not in r
 
         assert res_late["refreshedAt"] == res_chained["refreshedAt"]
         assert res_late["runpod"]["balanceUsd"] == 102.0
@@ -868,7 +922,8 @@ def test_trusted_host_and_content_type_enforcement(tmp_path: Path):
             res_data = res_json.json()
             assert isinstance(res_data, dict)
             assert "runpod" in res_data
-            assert "langfuse" in res_data
+            assert "openrouter" in res_data
+            assert "langfuse" not in res_data
 
     asyncio.run(run())
 
@@ -940,9 +995,12 @@ def test_langfuse_unknown_cost_field_fails_month_and_sets_daily_error():
 # --------------------------------------------------------------------------
 def test_openrouter_credits_and_activity_parsing_and_bearer_auth():
     async def run():
-        from datetime import datetime, timezone
+        from datetime import datetime, timedelta, timezone
 
-        today_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        today = datetime.now(timezone.utc).date()
+        today_str = today.strftime("%Y-%m-%d")
+        kept_str = (today - timedelta(days=20)).strftime("%Y-%m-%d")
+        dropped_str = (today - timedelta(days=40)).strftime("%Y-%m-%d")
         seen_requests = []
 
         def handler(request: httpx.Request) -> httpx.Response:
@@ -973,6 +1031,16 @@ def test_openrouter_credits_and_activity_parsing_and_bearer_auth():
                                 "usage": 1.25,
                                 "byok_usage_inference": 0.75,
                             },
+                            {
+                                "date": kept_str,
+                                "usage": 4.0,
+                                "byok_usage_inference": 0.0,
+                            },
+                            {
+                                "date": dropped_str,
+                                "usage": 9.0,
+                                "byok_usage_inference": 0.0,
+                            },
                         ]
                     },
                 )
@@ -987,6 +1055,7 @@ def test_openrouter_credits_and_activity_parsing_and_bearer_auth():
                             "usage_monthly": 20.0,
                             "limit": 100.0,
                             "limit_remaining": 80.0,
+                            "effective_budget": {"remaining_usd": 80.0},
                             "is_management_key": True,
                         }
                     },
@@ -1002,12 +1071,15 @@ def test_openrouter_credits_and_activity_parsing_and_bearer_auth():
         assert res["remainingUsd"] == 74.75
         assert res["totalCreditsUsd"] == 100.5
         assert res["totalUsageUsd"] == 25.75
-        assert len(res["daily"]) == 1
+        assert len(res["daily"]) == 2
+        by_date = {row["date"]: row for row in res["daily"]}
+        assert dropped_str not in by_date
+        assert by_date[kept_str]["usageUsd"] == 4.0
         # 같은 날짜 두 행의 usage(2.5 + 1.25 = 3.75)와 byok(0.5 + 0.75 = 1.25)가 각각 합쳐짐
-        assert res["daily"][0]["date"] == today_str
-        assert res["daily"][0]["usageUsd"] == 3.75
-        assert res["daily"][0]["byokUsd"] == 1.25
+        assert by_date[today_str]["usageUsd"] == 3.75
+        assert by_date[today_str]["byokUsd"] == 1.25
         assert res["todayUsageUsd"] == 3.75
+        assert res["budgetRemainingUsd"] == 80.0
 
         # 요청 URL에 키가 없고 Authorization은 Bearer sk-or-test-cccc
         assert len(seen_requests) == 3
@@ -1271,8 +1343,7 @@ def test_poller_openrouter_failure_preserves_previous_credits_and_other_provider
         st1 = await poller.refresh()
         assert st1["runpod"]["ok"] is True
         assert st1["runpod"]["balanceUsd"] == 100.0
-        assert st1["langfuse"]["ok"] is True
-        assert st1["langfuse"]["monthCostUsd"] == 30.0
+        assert "langfuse" not in st1
         assert st1["openrouter"]["ok"] is True
         assert st1["openrouter"]["remainingUsd"] == 150.0
 
@@ -1281,8 +1352,6 @@ def test_poller_openrouter_failure_preserves_previous_credits_and_other_provider
         st2 = await poller.refresh()
         assert st2["runpod"]["ok"] is True
         assert st2["runpod"]["balanceUsd"] == 100.0
-        assert st2["langfuse"]["ok"] is True
-        assert st2["langfuse"]["monthCostUsd"] == 30.0
 
         # OpenRouter는 ok False이지만 남은 크레딧(150.0)은 유지되어야 함
         assert st2["openrouter"]["ok"] is False
@@ -1954,23 +2023,26 @@ def test_render_html_and_markdown_amounts_and_missing_secrets():
             "remainingUsd": 85.0,
             "totalCreditsUsd": 100.0,
             "totalUsageUsd": 15.0,
+            "keyLimitUnlimited": False,
+            "keyLimitRemainingUsd": None,
+            "budgetRemainingUsd": 12.5,
         },
         "missingSecrets": ["RUNPOD_API_KEY", "OPENROUTER_API_KEY"],
     }
     html = render_html(data)
     assert "$150.25 USD" in html
-    assert "$32.50 USD" in html
-    assert "$1.25 USD" in html
     assert "$85.00 USD" in html
-    assert "잔액이 아니라 이번 달 추적된 LLM 비용입니다" in html
+    assert "$12.50 USD" in html
+    assert "Langfuse" not in html
     assert "설정되지 않은 시크릿 안내" in html
     assert "RUNPOD_API_KEY" in html
     assert "OPENROUTER_API_KEY" in html
 
     md = render_markdown(data)
     assert "$150.25 USD" in md
-    assert "$32.50 USD" in md
     assert "$85.00 USD" in md
+    assert "$12.50 USD" in md
+    assert "Langfuse" not in md
     assert "설정되지 않은 시크릿 안내" in md
     assert "RUNPOD_API_KEY" in md
 
@@ -2028,7 +2100,8 @@ def test_publish_balances_main_generates_files(tmp_path: Path, monkeypatch):
     assert dist_index.is_file()
     content = dist_index.read_text(encoding="utf-8")
     assert "$77.77 USD" in content
-    assert "$22.22 USD" in content
+    assert "$22.22 USD" not in content
+    assert "Langfuse" not in content
     assert "$99.99 USD" in content
 
     assert summary_file.is_file()
@@ -2046,8 +2119,9 @@ def test_pages_workflow_deploys_report_without_printing_secrets():
     assert "actions/upload-pages-artifact@v3" in workflow
     assert "actions/deploy-pages@v4" in workflow
     assert "path: dist" in workflow
-    assert "secrets.LANGFUSE_PUBLIC_KEY" in workflow
-    assert "secrets.LANGFUSE_SECRET_KEY" in workflow
+    assert "secrets.LANGFUSE_PUBLIC_KEY" not in workflow
+    assert "secrets.LANGFUSE_SECRET_KEY" not in workflow
+    assert "LANGFUSE_HOST" not in workflow
     assert "secrets.RUNPOD_API_KEY" in workflow
     assert "secrets.OPENROUTER_API_KEY" in workflow
     lowered = workflow.lower()

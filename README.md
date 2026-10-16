@@ -1,19 +1,15 @@
 # Tilapia - 팀 비용 & 선불 잔액 모니터
 
-Langfuse 추적 비용과 Runpod 선불 잔액, OpenRouter 크레딧을 127.0.0.1 로컬 웹 브라우저에서 실시간으로 확인하고 모니터링하는 프로그램입니다. OpenRouter 계정 남은 크레딧 및 일별 사용량, 키 사용량과 한도 모니터링도 함께 지원합니다.
+Runpod 선불 잔액과 OpenRouter 크레딧을 127.0.0.1 로컬 웹 브라우저에서 확인하고, GitHub Pages로 팀과 공유하는 프로그램입니다.
 
 ---
 
 ## 1. 사전 준비 및 API 키 발급 위치
 
 ### Runpod API Key
-- **발급 위치**: [Runpod 콘솔 Settings - API Keys](https://www.runpod.io/console/user/settings)
+- **발급 위치**: [Runpod 콘솔 Settings - API Keys](https://www.runpod.io/console/user/settings)의 **API Keys** 탭
 - **용도**: Runpod 계정 선불 잔액(`myself.clientBalance`), 시간당 소진율, 최근 14일 일별 청구 요금 조회에 사용됩니다.
-
-### Langfuse API Keys (Public Key & Secret Key)
-- **발급 위치**: [Langfuse Cloud](https://cloud.langfuse.com) 로그인 후 각 프로젝트의 **Settings** -> **API Keys** 메뉴
-- **용도**: 프로젝트 정보 및 Metrics API v2를 통한 LLM 비용 추적 조회에 사용됩니다.
-- **호스트**: 기본 `https://cloud.langfuse.com` 외에 미국(`us.cloud.langfuse.com`), 유럽(`eu.cloud.langfuse.com`), 일본(`jp.cloud.langfuse.com`), HIPAA(`hipaa.cloud.langfuse.com`) 공식 호스트만 지원합니다.
+- **등록**: `rpa_`로 시작하는 키를 복사해 `RUNPOD_API_KEY`에 넣습니다. 따옴표와 `Bearer`는 붙이지 않습니다. 권한은 Read & Write이고 키가 Enabled여야 합니다.
 
 ### OpenRouter API Key
 - **발급 위치**: [OpenRouter Management Keys](https://openrouter.ai/settings/management-keys)
@@ -23,18 +19,8 @@ Langfuse 추적 비용과 Runpod 선불 잔액, OpenRouter 크레딧을 127.0.0.
 - **남은 크레딧 계산식**:
   - OpenRouter API는 별도의 잔액 필드를 제공하지 않으므로, 남은 크레딧은 누적 충전분(`total_credits`)에서 누적 사용액(`total_usage`)을 뺀 값(`total_credits - total_usage`)으로 계산하여 표시합니다.
 - **일별 사용량 및 BYOK 안내**:
-  - 최근 14일 일별 사용량은 UTC 기준으로 완료된 일자만 제공되며, 진행 중인 오늘은 activity 응답에 없을 수 있습니다.
+  - 일별 사용량은 activity가 주는 최근 30 완료일(UTC)입니다. 진행 중인 오늘은 응답에 없을 수 있고, 그 경우 오늘 계정 사용은 0이 아니라 빈 칸입니다.
   - BYOK(Bring Your Own Key) 사용량은 크레딧 사용과 별도 열로 표기되며, 추정 금액(`byok_usage_inference`)입니다.
-
-> [!IMPORTANT]
-> **Langfuse 잔액 표시 제한 사항**:
-> Langfuse Cloud의 공개 API에는 선불 잔액이나 청구서 잔액 엔드포인트가 제공되지 않습니다.
-> 따라서 본 프로그램의 Langfuse 카드에 표시되는 금액은 **"이번 달 추적된 LLM 비용"**(Metrics API v2 `observations.totalCost` 합계)입니다.
-
-> [!WARNING]
-> **Langfuse Hobby 플랜 API 호출 한도 주의**:
-> Langfuse Hobby 플랜은 Metrics API 호출이 **하루 100회**로 제한되어 있습니다.
-> 기본 설정인 5분 주기로 계속 조회할 경우 하루 약 288회 조회가 발생하며, 1회 조회당 Langfuse Metrics API를 2번(이번 달, 최근 14일) 호출하므로 Metrics API만 하루 약 576회 호출이 발생합니다 (projects 1회는 Metrics 한도와 별도). 따라서 일일 한도를 넘겨 429 오류가 발생할 수 있으니, Hobby 플랜을 사용 중인 경우 설정에서 조회 주기를 늘리거나 필요할 때만 '지금 조회' 버튼을 눌러 수동 새로고침하는 것을 권장합니다.
 
 ---
 
@@ -64,9 +50,6 @@ uvicorn app.main:app --host 127.0.0.1 --port 8765
 ## 3. 설정 관리 및 우선순위
 
 - **설정 항목**:
-  - `LANGFUSE_HOST`: Langfuse 호스트 URL (기본값: `https://cloud.langfuse.com`)
-  - `LANGFUSE_PUBLIC_KEY`: Langfuse Public Key
-  - `LANGFUSE_SECRET_KEY`: Langfuse Secret Key
   - `RUNPOD_API_KEY`: Runpod API Key
   - `OPENROUTER_API_KEY`: OpenRouter API Key
   - `REFRESH_MINUTES`: 자동 조회 주기 (1~60분, 기본값: 5)
@@ -95,11 +78,8 @@ GitHub Actions 워크플로를 통해 로컬 서버를 상시 띄워두지 않�
 
 - **키 등록**:
   - API 키는 GitHub 저장소의 **Settings → Secrets and variables → Actions**에 등록합니다.
-    - `LANGFUSE_PUBLIC_KEY` (Secret)
-    - `LANGFUSE_SECRET_KEY` (Secret)
     - `RUNPOD_API_KEY` (Secret)
     - `OPENROUTER_API_KEY` (Secret)
-    - `LANGFUSE_HOST` (Variable, 없어도 됨)
   - 소스 코드, 커밋, 워크플로 YAML 파일 및 `.env.example`에는 키 원문을 절대 넣지 않습니다.
 
 - **공개 홈페이지**:
