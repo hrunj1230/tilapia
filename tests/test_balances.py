@@ -2036,6 +2036,25 @@ def test_publish_balances_main_generates_files(tmp_path: Path, monkeypatch):
     assert "$77.77 USD" in summary_content
 
 
+# --------------------------------------------------------------------------
+# 45. Pages 워크플로는 리포트만 배포하고 시크릿을 출력하지 않음
+# --------------------------------------------------------------------------
+def test_pages_workflow_deploys_report_without_printing_secrets():
+    workflow = (
+        Path(__file__).resolve().parent.parent / ".github" / "workflows" / "balances.yml"
+    ).read_text(encoding="utf-8")
+    assert "actions/upload-pages-artifact@v3" in workflow
+    assert "actions/deploy-pages@v4" in workflow
+    assert "path: dist" in workflow
+    assert "secrets.LANGFUSE_PUBLIC_KEY" in workflow
+    assert "secrets.LANGFUSE_SECRET_KEY" in workflow
+    assert "secrets.RUNPOD_API_KEY" in workflow
+    assert "secrets.OPENROUTER_API_KEY" in workflow
+    lowered = workflow.lower()
+    assert "echo ${{" not in lowered
+    assert "echo $" not in lowered
+
+
 
 
 
